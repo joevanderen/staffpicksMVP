@@ -1,0 +1,95 @@
+id,category,prompt,short_title,weight,repeatable,status
+P001,Travel,What is your favorite city to visit for 2 days?,2-day city,1,no,ready
+P002,Travel,What is your favorite city to visit for 4 days?,4-day city,1,no,ready
+P003,Travel,What is your favorite city to visit for a week?,Week-long city,1,no,ready
+P004,Travel,What is the best city to spend a month?,Month-long city,1,no,ready
+P005,Travel,What is the best city to spend 6 months?,6-month city,1,no,ready
+P006,Travel,"If you had to pick one city to spend the rest of your life, what would it be?",Forever city,1,no,ready
+P007,Travel,Where is the best natural body of water you have swum in?,Best swim,1,no,ready
+P008,Travel,What country do you wish you could go to? Why can't you?,Can't-go country,1,no,ready
+P009,Travel,What is the best city to visit to eat?,Best food city,1,no,ready
+P010,Food,What is your favorite recipe to cook?,Favorite recipe,1,no,ready
+P011,Food,What is your goto easy meal to cook right now?,Easy meal right now,1,yes,ready
+P012,Food,Where would you go for the best meal less than $20 in your city?,Best meal under $20,1,no,ready
+P013,Food,"Fuck, its midnight on a Tuesday. You are ferociously hungry and lazy. Where do you go to eat?",Midnight Tuesday eats,1,no,ready
+P014,Food,What is the best dessert?,Best dessert,1,no,ready
+P015,Food,What is your favorite ice cream flavor from where?,Ice cream flavor,1,no,ready
+P016,General,What do you do way more than the average person?,Way more than most,1,no,ready
+P017,General,What is your favorite moment of an average weekday?,Favorite weekday moment,1,no,ready
+P018,General,What podcast are you enjoying right now?,Current podcast,1,yes,ready
+P019,General,What game,Game (unfinished),1,no,needs completion
+P020,General,What do you do way less than the average person?,Way less than most,1,no,ready
+P021,General,"You have 3 months off of work, parenting, etc. I give you $20,000. What do you do with the time and money?",3 months and $20k,1,no,ready
+P022,General,What is a trip you have yet to do that you dream of?,Dream trip,1,no,ready
+P023,General,What is something you want to work on about yourself over the next year?,"Project: me, next year",1,yes,ready
+P024,General,What are you proud of that you did this week?,Proud of this week,1,yes,ready
+P025,General,What have you invested your time into that was a good decision?,Time well invested,1,no,ready
+P026,General,What purchase of the last year are you proud of?,Best purchase of the year,1,yes,ready
+P027,General,What do you do to meet new people?,Meeting new people,1,no,ready
+P028,General,What are you doing to use your phone less?,Using my phone less,1,no,ready
+P029,General,What do you do to get motivated to get in better shape?,Getting in shape,1,no,ready
+P030,Literature,What was your favorite book when you were a child?,Childhood favorite book,1,no,ready
+P031,Literature,What was your favorite book in high school?,High school favorite book,1,no,ready
+P032,Literature,What book would you recommend to a high school graduate?,Book for a graduate,1,no,ready
+P033,Literature,What book would you recommend to someone to get into ____ genre? Pick the genre and book,Gateway book to a genre,1,no,ready
+P034,Literature,What book would you recommend for someone to read on their next beach vacation?,Beach vacation book,1,no,ready
+P035,Literature,Favorite recent read of yours?,Favorite recent read,1,yes,ready
+P036,Cinema,What movie have you watched the most in your life?,Most-watched movie,1,no,ready
+P037,Cinema,What is your favorite movie you have seen in the cinema in the last year?,Best in cinema this year,1,yes,ready
+P038,Television,What series have you watched the most in your life?,Most-watched series,1,no,ready
+P039,Television,"Damn, you've got Covid. What show are you going to watch while home sick?",Sick-day show,1,no,ready
+P040,Television,What show inspires you to do something?,Show that inspires,1,no,ready
+P041,Music,What is your fight walkout song?,Walkout song,1,no,ready
+P042,Music,What song did your parents play while conceiving you?,Your conception song,1,no,ready
+P043,Music,What song will play/played while conceiving your first child?,Your child's conception song,1,no,ready
+P044,Music,"You have to do a 45 minute hard workout, what album would you play?",Workout album,1,no,ready
+P045,Music,"You have to do a 45 minute hard workout, what playlist would you play?",Workout playlist,1,no,ready
+P046,Music,What song played during your teenage breakup?,Teenage breakup song,1,no,ready
+P047,Music,What is your favorite song of the last week?,Song of the week,1,yes,ready
+P048,Music,What is your favorite album or playlist of the week?,Album or playlist of the week,1,yes,ready
+P049,Music,"You get mistakenly called to DJ for a full dance floor at a retirement home, what do you play?",Retirement home DJ set,1,no,ready
+P050,Music,"You get mistakenly called to DJ for a full dance floor at the club, what do you play?",Club DJ set,1,no,ready
+P051,Music,"Your girlfriend/boyfriend just broke up with you, what song or album are you playing?",Breakup song,1,no,ready
+P052,Music,"Shit. You just found out you failed your final exam, you are on a full subway, there is someone yelling at you in a foreign language. You haven't eaten in 10 hours. What album or song do you play to calm down?",Bad day on the subway,1,no,ready
+P053,Music,"You traveled 10 years in the past, what song are you excited to hear at the party?","Party song, 10 years ago",1,no,ready
+P054,Music,What is your favorite song or album that no one has ever heard of?,Hidden gem,1,no,ready
+F01,Fake,What is the most trustworthy kind of sandwich?,,11,,animation only
+F02,Fake,Which cloud would you vote for?,,11,,animation only
+F03,Fake,What is your favorite thing to say to a pigeon?,,11,,animation only
+F04,Fake,"If your left sock had a podcast, what would it be called?",,11,,animation only
+F05,Fake,What song plays when you enter a room in your imagination?,,11,,animation only
+F06,Fake,What is the best sound a door can make?,,11,,animation only
+F07,Fake,Which vegetable has the most untapped potential?,,11,,animation only
+F08,Fake,What would your houseplant's walkout song be?,,11,,animation only
+F09,Fake,What is the most overqualified object in your kitchen?,,11,,animation only
+F10,Fake,What is the best thing to yell into a canyon?,,11,,animation only
+F11,Fake,Which animal would be the worst roommate?,,11,,animation only
+F12,Fake,What is your favorite smell that is not a smell?,,11,,animation only
+F13,Fake,What would you name a boat that is also a lawyer?,,11,,animation only
+F14,Fake,What is your favorite word to say to a tired horse?,,11,,animation only
+F15,Fake,"If the moon had a restaurant, what would the signature dish be?",,11,,animation only
+F16,Fake,What is the best hat for a Tuesday?,,11,,animation only
+F17,Fake,Which famous bridge would you trust with your keys?,,11,,animation only
+F18,Fake,"What is the finest soup in the history of soup, and how did it get that way?",,11,,animation only
+F19,Fake,What is the correct way to apologize to a goose?,,11,,animation only
+F20,Fake,What is the most dignified way to carry a baguette?,,11,,animation only
+F21,Fake,What movie would be improved by one additional llama?,,11,,animation only
+F22,Fake,What book would you only ever read to a plant?,,11,,animation only
+F23,Fake,What is the best name for a cat that works in finance?,,11,,animation only
+F24,Fake,What album plays while you assemble furniture with no instructions?,,11,,animation only
+F25,Fake,What is the loudest color?,,11,,animation only
+F26,Fake,What is your favorite thing about the number seven?,,11,,animation only
+F27,Fake,Which weather would you hire as your assistant?,,11,,animation only
+F28,Fake,What is the most suspicious fruit?,,11,,animation only
+F29,Fake,What do you whisper to the elevator?,,11,,animation only
+F30,Fake,What would you do with a lifetime supply of ping pong balls?,,11,,animation only
+F31,Fake,Which kitchen utensil would you promote to manager?,,11,,animation only
+F32,Fake,"What is the best place to nap in a major airport, and with whom?",,11,,animation only
+F33,Fake,What is the best theme song for a washing machine?,,11,,animation only
+F34,Fake,"If clouds went on tour, which city would they visit for 2 days?",,11,,animation only
+F35,Fake,What is your favorite thing a stranger has ever handed you?,,11,,animation only
+F36,Fake,What would your dentist's walkout song be?,,11,,animation only
+F37,Fake,What is the most elegant way to lose an argument with a seagull?,,11,,animation only
+F38,Fake,Which ocean has the best attitude?,,11,,animation only
+F39,Fake,What is the most emotional thing you have ever said to a vending machine?,,11,,animation only
+F40,Fake,What would the world's smallest museum contain?,,11,,animation only

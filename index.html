@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Staff Picks</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Special+Elite&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="desktop">
+    <div class="stack">
+
+      <!-- Welcome / name -->
+      <section class="win welcome" id="win-welcome" hidden>
+        <div class="titlebar"><span>Welcome.exe</span></div>
+        <div class="win-body">
+          <h1 class="site-name" data-site-name></h1>
+          <p class="tagline" data-tagline></p>
+          <p>Every day there's one question for everybody. You answer today's to unlock everyone else's answers, and you can catch up on old days whenever you like.</p>
+          <form id="name-form" class="row">
+            <label for="name-input">Your name</label>
+            <input id="name-input" maxlength="40" required autocomplete="nickname" placeholder="What should we call you?">
+            <button class="btn" type="submit">OK</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- The app -->
+      <section class="win shell" id="shell" hidden>
+        <div class="titlebar">
+          <span><button class="menu-btn" id="menu-btn" type="button" aria-label="Show days menu">☰</button> <span data-site-name></span></span>
+          <span class="who"><span id="who"></span> <button class="linklike inv" id="rename" type="button">not you?</button></span>
+        </div>
+        <div class="shell-body">
+          <nav class="side" id="side" aria-label="Days and folders"></nav>
+          <div class="main" id="main"></div>
+        </div>
+      </section>
+
+      <!-- Preview-only controls -->
+      <section class="win" id="demo-tools" hidden>
+        <div class="titlebar"><span>Demo tools (preview only, never shown on the real site)</span></div>
+        <div class="win-body">
+          <p style="margin-top:0">This is demo mode: nothing leaves your device. Use these to see how the site behaves over several days.</p>
+          <div class="row">
+            <button class="btn" id="demo-joined" type="button">Pretend I joined 6 days ago</button>
+            <button class="btn" id="demo-next" type="button">Jump to tomorrow</button>
+            <button class="btn" id="demo-reset" type="button">Reset demo</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <footer class="taskbar">
+    <button class="start" type="button" id="start-btn"><span class="logo">▣</span> Start</button>
+    <span class="task" id="mode-label"></span>
+    <span class="clock" id="clock"></span>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="prompts.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
