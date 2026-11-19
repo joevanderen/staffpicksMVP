@@ -9,7 +9,7 @@ window.APP_CONFIG = {
   SUPABASE_URL: "https://dzittshmfsrbopblfftc.supabase.co",
   SUPABASE_ANON_KEY: "sb_publishable_FaXvjl6-mz43tQkMv4cFKA_G6SHK2u3",
 
-  CAPTION_MAX: 200,
+  CAPTION_MAX: 300,
 
   // A new day starts at 6:00 AM Buenos Aires time. Argentina is UTC-3 all year,
   // so that is 09:00 UTC. (Change this number if you want a different start hour.)
@@ -38,9 +38,8 @@ window.APP_CONFIG = {
   // The reaction buttons. "graffiti" is the marker scrawl that appears once someone reacts.
   REACTIONS: [
     { kind: "never_heard", label: "Woah, I've never heard of that!", graffiti: "WOAH!" },
-    { kind: "disagree",    label: "OMG I disagree!",                 graffiti: "NOPE!!" },
-    { kind: "same",        label: "Yes, same!",                      graffiti: "same!!" },
-    { kind: "want_to_try", label: "I want to try this",              graffiti: "must try" },
-    { kind: "loved_it",    label: "Already did it, loved it",        graffiti: "★ loved it" }
-  ]
+    { kind: "same",        label: "Preach",                          graffiti: "PREACH" },
+    { kind: "disagree",    label: "No! God! No! God! Please! NO!",   graffiti: "NO! GOD! NO!" }
+  ],
+  // Older reaction kinds (want_to_try, loved_it) are still stored but no longer shown.
 };

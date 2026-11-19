@@ -27,7 +27,7 @@ create table posts (
   author_name  text not null check (char_length(author_name) between 1 and 40),
   device_id    text not null,
   title        text not null check (char_length(title) between 1 and 120),
-  caption      text not null default '' check (char_length(caption) <= 200),
+  caption      text not null default '' check (char_length(caption) <= 300),
   link         text check (link is null or char_length(link) <= 500),
   scope        text not null default 'global',   -- later: global / national / state / city / circle
   scope_ref    text                              -- later: which country, state, city or friend group

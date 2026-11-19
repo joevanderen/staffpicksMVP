@@ -43,3 +43,7 @@ Pasting a link adds a smart button ("Listen on Spotify", "Watch on YouTube", "Op
 - Someone who clears their browser data or switches devices counts as a new person (and gets an empty inbox).
 - "My list" is saved on each device only.
 - Fonts come from Google Fonts; offline, similar system fonts are used.
+
+## Updating a live site (update 1)
+1. In Supabase, run `supabase-update-1.sql` (it only adds things; nothing is deleted).
+2. Then upload the new site files to GitHub, replacing the old ones (keep your config.js keys).

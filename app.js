@@ -46,7 +46,7 @@
   // ============================================================
   const KEY = "staffpicks.v2";
   function freshState() {
-    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, demoOffset: 0 };
+    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, savesSynced: false, demoOffset: 0 };
   }
   function loadState() {
     try { return Object.assign(freshState(), JSON.parse(localStorage.getItem(KEY) || "{}")); }
@@ -108,9 +108,17 @@
         const rows = await req("/posts", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(p) });
         return rows && rows[0];
       },
-      listReactions: () => req("/reactions?select=post_id,device_id,kind&limit=10000"),
+      listReactions: () => req("/reactions?select=post_id,device_id,kind,name&limit=10000"),
       addReaction: (postId, kind) =>
-        req("/reactions", { method: "POST", body: JSON.stringify({ post_id: postId, device_id: state.deviceId, kind }) }),
+        req("/reactions", { method: "POST", body: JSON.stringify({ post_id: postId, device_id: state.deviceId, kind, name: state.name }) }),
+      listSaves: () => req("/saves?select=post_id,device_id,name&limit=10000"),
+      addSave: (postId) =>
+        req("/saves?on_conflict=post_id,device_id", {
+          method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+          body: JSON.stringify({ post_id: postId, device_id: state.deviceId, name: state.name })
+        }),
+      removeSave: (postId) =>
+        req(`/saves?post_id=eq.${encodeURIComponent(postId)}&device_id=eq.${encodeURIComponent(state.deviceId)}`, { method: "DELETE" }),
       removeReaction: (postId, kind) =>
         req(`/reactions?post_id=eq.${encodeURIComponent(postId)}&device_id=eq.${encodeURIComponent(state.deviceId)}&kind=eq.${encodeURIComponent(kind)}`, { method: "DELETE" })
     };
@@ -149,7 +157,7 @@
   };
 
   const demo = (() => {
-    const PK = "staffpicks.demo2.prompts", OK = "staffpicks.demo2.posts", RK = "staffpicks.demo2.reactions";
+    const PK = "staffpicks.demo2.prompts", OK = "staffpicks.demo2.posts", RK = "staffpicks.demo2.reactions", SK = "staffpicks.demo2.saves";
     const rd = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } };
     const wr = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
 
@@ -201,11 +209,21 @@
       async addReaction(postId, kind) {
         const all = rd(RK, []);
         if (!all.some((r) => r.post_id === postId && r.device_id === state.deviceId && r.kind === kind))
-          all.push({ post_id: postId, device_id: state.deviceId, kind });
+          all.push({ post_id: postId, device_id: state.deviceId, kind, name: state.name });
         wr(RK, all);
       },
       async removeReaction(postId, kind) {
         wr(RK, rd(RK, []).filter((r) => !(r.post_id === postId && r.device_id === state.deviceId && r.kind === kind)));
+      },
+      async listSaves() { return rd(SK, []); },
+      async addSave(postId) {
+        const all = rd(SK, []);
+        if (!all.some((x) => x.post_id === postId && x.device_id === state.deviceId))
+          all.push({ post_id: postId, device_id: state.deviceId, name: state.name });
+        wr(SK, all);
+      },
+      async removeSave(postId) {
+        wr(SK, rd(SK, []).filter((x) => !(x.post_id === postId && x.device_id === state.deviceId)));
       },
       // demo-only: a few friends reply late to days the viewer already answered
       addLateSamples(days) {
@@ -233,7 +251,8 @@
   let posts = [];
   let postsByDay = {};
   let mine = {};
-  let reactions = {}; // postId -> { kind: { n, mine } }
+  let reactions = {}; // postId -> { kind: { n, mine, names: [] } }
+  let saves = {};     // postId -> { names: [], mine }
 
   function reindex() {
     postsByDay = {}; mine = {};
@@ -247,20 +266,47 @@
     const map = {};
     for (const r of list) {
       const slot = (map[r.post_id] = map[r.post_id] || {});
-      const k = (slot[r.kind] = slot[r.kind] || { n: 0, mine: false });
+      const k = (slot[r.kind] = slot[r.kind] || { n: 0, mine: false, names: [] });
       k.n += 1;
+      k.names.push(r.name || "a friend");
       if (r.device_id === state.deviceId) k.mine = true;
+    }
+    return map;
+  }
+  function buildSaveMap(list) {
+    const map = {};
+    for (const r of list) {
+      const s = (map[r.post_id] = map[r.post_id] || { names: [], mine: false });
+      s.names.push(r.name || "a friend");
+      if (r.device_id === state.deviceId) s.mine = true;
     }
     return map;
   }
 
   async function loadAll() {
-    const [pr, po, re] = await Promise.all([store.listPrompts(), store.listPosts(), store.listReactions()]);
+    const [pr, po, re, sv] = await Promise.all([
+      store.listPrompts(), store.listPosts(), store.listReactions(),
+      store.listSaves().catch(() => [])
+    ]);
     promptsByDay = {};
     for (const r of pr || []) promptsByDay[r.day] = r;
     posts = po || [];
     reactions = buildReactionMap(re || []);
+    saves = buildSaveMap(sv || []);
     reindex();
+    syncOldSaves();
+  }
+  // one-time: lists saved on this device before saves lived online get shared now
+  function syncOldSaves() {
+    if (state.savesSynced) return;
+    state.savesSynced = true; saveState();
+    for (const id of Object.keys(state.saved)) {
+      if (!posts.some((p) => p.id === id)) continue;
+      if (saves[id] && saves[id].mine) continue;
+      store.addSave(id).catch(() => { state.savesSynced = false; saveState(); });
+      const s = (saves[id] = saves[id] || { names: [], mine: false });
+      s.names.push(state.name || "a friend"); s.mine = true;
+    }
   }
 
   // ============================================================
@@ -358,8 +404,16 @@
   // saving things to "My list" (this device only, for now)
   // ============================================================
   function toggleSave(post) {
-    if (state.saved[post.id]) { delete state.saved[post.id]; }
-    else {
+    const slot = (saves[post.id] = saves[post.id] || { names: [], mine: false });
+    const me = state.name || "a friend";
+    if (state.saved[post.id]) {
+      delete state.saved[post.id];
+      slot.mine = false;
+      const i = slot.names.indexOf(me); if (i >= 0) slot.names.splice(i, 1);
+      store.removeSave(post.id).catch(() => {});
+    } else {
+      slot.mine = true; slot.names.push(me);
+      store.addSave(post.id).catch(() => {});
       const row = promptsByDay[post.day] || {};
       state.saved[post.id] = {
         id: post.id, title: post.title, category: row.category || "General", from: post.author_name,
@@ -414,17 +468,20 @@
 
   async function toggleReaction(post, kind, repaint) {
     const slot = (reactions[post.id] = reactions[post.id] || {});
-    const cur = (slot[kind] = slot[kind] || { n: 0, mine: false });
+    const cur = (slot[kind] = slot[kind] || { n: 0, mine: false, names: [] });
+    cur.names = cur.names || [];
+    const me = state.name || "a friend";
     const adding = !cur.mine;
-    cur.mine = adding;
-    cur.n = Math.max(0, cur.n + (adding ? 1 : -1));
+    const flip = (add) => {
+      cur.mine = add;
+      cur.n = Math.max(0, cur.n + (add ? 1 : -1));
+      if (add) cur.names.push(me);
+      else { const i = cur.names.indexOf(me); if (i >= 0) cur.names.splice(i, 1); }
+    };
+    flip(adding);
     repaint();
     try { await (adding ? store.addReaction(post.id, kind) : store.removeReaction(post.id, kind)); }
-    catch {
-      cur.mine = !adding;
-      cur.n = Math.max(0, cur.n + (adding ? -1 : 1));
-      repaint();
-    }
+    catch { flip(!adding); repaint(); }
   }
 
   function makeCard(post, opts = {}) {
@@ -435,14 +492,17 @@
     c.append(el("div", { class: "tape" }));
     if (opts.heading) c.append(el("p", { class: "prompt" }, opts.heading));
     c.append(el("h3", { class: "title", text: post.title }));
+    if (post.confidence === "sure" || post.confidence === "vibes")
+      c.append(el("span", { class: "stamp " + post.confidence, text: post.confidence === "sure" ? "strong opinion" : "just vibes" }));
     if (post.caption) c.append(el("p", { class: "caption", text: post.caption }));
     const lb = linkBlock(post.link);
     if (lb) c.append(lb);
     c.append(el("p", { class: "meta", text: "— " + post.author_name + ", " + when }));
 
     const bar = el("div", { class: "reactions" });
+    const who = el("div", { class: "who" });
     let graf = el("div");
-    c.append(bar, graf);
+    c.append(bar, who, graf);
 
     function paint() {
       bar.textContent = "";
@@ -455,11 +515,19 @@
       const slot = reactions[post.id] || {};
       for (const r of cfg.REACTIONS) {
         const info = slot[r.kind] || { n: 0, mine: false };
-        const b = el("button", { class: "rbtn", type: "button", "aria-pressed": String(info.mine), onclick: () => toggleReaction(post, r.kind, paint) });
+        const b = el("button", { class: "rbtn", type: "button", "aria-pressed": String(info.mine),
+          title: info.n > 0 ? (info.names || []).join(", ") : null, onclick: () => toggleReaction(post, r.kind, paint) });
         b.append(r.label);
         if (info.n > 0) b.append(el("span", { class: "n", text: String(info.n) }));
         bar.append(b);
       }
+      who.textContent = "";
+      for (const r of cfg.REACTIONS) {
+        const info = slot[r.kind];
+        if (info && info.n > 0) who.append(el("p", {}, el("b", { text: r.graffiti + ": " }), (info.names || []).join(", ")));
+      }
+      const sv = saves[post.id];
+      if (sv && sv.names.length) who.append(el("p", {}, el("b", { text: "On their list: " }), sv.names.join(", ")));
       const g = graffitiFor(post);
       graf.replaceWith(g);
       graf = g;
@@ -476,6 +544,12 @@
     const caption = el("textarea", { rows: "3", maxlength: String(cfg.CAPTION_MAX), placeholder: "A line or two. Be honest." });
     const link = el("input", { type: "text", inputmode: "url", autocapitalize: "off", maxlength: "500", placeholder: "Spotify, YouTube, Maps, anything..." });
     const counter = el("em");
+    let confidence = null;
+    const confBtns = [["sure", "Strong opinion"], ["vibes", "Just vibes"]].map(([val, label]) =>
+      el("button", { class: "rbtn", type: "button", "aria-pressed": "false", text: label, onclick: () => {
+        confidence = confidence === val ? null : val;
+        confBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(confidence === ["sure", "vibes"][i])));
+      } }));
     const err = el("p", { class: "err", role: "alert" });
     const btn = el("button", { class: "btn big", type: "submit", text: "Post it" });
     const form = el("form", { class: "answer-form" },
@@ -483,6 +557,9 @@
       el("label", { class: "field" }, el("span", {}, "Why? ", counter), caption),
       el("label", { class: "field" }, el("span", { text: "Link (optional)" }), link,
         el("p", { class: "hint", text: "Spotify and YouTube links get a play button in the feed." })),
+      el("div", { class: "field" }, el("span", { text: "How sure are you? (optional)" }),
+        el("div", { class: "reactions" }, ...confBtns),
+        el("p", { class: "hint", text: "Tap again to clear. Skip it if you'd rather not say." })),
       el("div", { class: "row" }, btn), err);
     const updateCounter = () => { counter.textContent = (cfg.CAPTION_MAX - caption.value.length) + " characters left"; };
     caption.addEventListener("input", updateCounter);
@@ -503,7 +580,7 @@
       try {
         const row = await store.addPost({
           day, author_name: state.name, device_id: state.deviceId,
-          title: t, caption: cap, link: lk || null, scope: "global"
+          title: t, caption: cap, link: lk || null, scope: "global", confidence
         });
         if (row) posts = [row, ...posts];
         reindex();
