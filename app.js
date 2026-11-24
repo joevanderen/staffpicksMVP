@@ -46,7 +46,7 @@
   // ============================================================
   const KEY = "staffpicks.v2";
   function freshState() {
-    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, savesSynced: false, demoOffset: 0 };
+    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, savesSynced: false, accountId: "", pendingInvite: "", demoOffset: 0 };
   }
   function loadState() {
     try { return Object.assign(freshState(), JSON.parse(localStorage.getItem(KEY) || "{}")); }
@@ -59,6 +59,13 @@
 
   const REMOTE = !!(cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY);
   if (REMOTE) state.demoOffset = 0;
+
+  // Who is acting. With an account: the profile. Without one: this device and the typed name.
+  let me = null;               // { id, username, display_name, role, blocked } once logged in and joined
+  let profileChecked = false;  // true once we know whether the logged-in user has a profile
+  const actorId = () => (me ? "u:" + me.id : state.deviceId);
+  const myName = () => (me ? me.display_name : state.name);
+  const isAdmin = () => !!(me && me.role === "admin");
 
   // ============================================================
   // days (a day starts at 6 AM Buenos Aires = 09:00 UTC)
@@ -87,12 +94,22 @@
     // Newer publishable keys (sb_publishable_...) are not JWTs, so they go in apikey only.
     if (cfg.SUPABASE_ANON_KEY.startsWith("eyJ")) headers.Authorization = "Bearer " + cfg.SUPABASE_ANON_KEY;
     async function req(path, opts = {}) {
-      const r = await fetch(base + path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+      const h = { ...headers };
+      const tok = await Auth.token();           // logged in: act as that person
+      if (tok) h.Authorization = "Bearer " + tok;
+      const r = await fetch(base + path, { ...opts, headers: { ...h, ...(opts.headers || {}) } });
       if (!r.ok) throw new Error((await r.text()) || r.statusText);
       if (r.status === 204) return null;
       try { return await r.json(); } catch { return null; }
     }
     return {
+      req,
+      rpc: (fn, args) => req("/rpc/" + fn, { method: "POST", body: JSON.stringify(args || {}) }),
+      listProfiles: () => req("/profiles?select=id,username,display_name,role,blocked,invited_by,invite_code,created_at&limit=2000"),
+      getProfile: (id) => req("/profiles?select=*&id=eq." + encodeURIComponent(id)).then((r) => (r && r[0]) || null),
+      listInvites: (id) => req("/invites?select=*&created_by=eq." + encodeURIComponent(id) + "&order=created_at.desc"),
+      setHidden: (postId, hidden) => req("/posts?id=eq." + encodeURIComponent(postId), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ hidden }) }),
+      setBlocked: (id, blocked) => req("/profiles?id=eq." + encodeURIComponent(id), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ blocked }) }),
       listPrompts: () => req("/daily_prompts?select=*&order=day.desc&limit=2000"),
       async addPrompt(row) {
         try {
@@ -110,17 +127,17 @@
       },
       listReactions: () => req("/reactions?select=post_id,device_id,kind,name&limit=10000"),
       addReaction: (postId, kind) =>
-        req("/reactions", { method: "POST", body: JSON.stringify({ post_id: postId, device_id: state.deviceId, kind, name: state.name }) }),
+        req("/reactions", { method: "POST", body: JSON.stringify({ post_id: postId, device_id: actorId(), kind, name: myName(), user_id: me ? me.id : undefined }) }),
       listSaves: () => req("/saves?select=post_id,device_id,name&limit=10000"),
       addSave: (postId) =>
         req("/saves?on_conflict=post_id,device_id", {
           method: "POST", headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
-          body: JSON.stringify({ post_id: postId, device_id: state.deviceId, name: state.name })
+          body: JSON.stringify({ post_id: postId, device_id: actorId(), name: myName(), user_id: me ? me.id : undefined })
         }),
       removeSave: (postId) =>
-        req(`/saves?post_id=eq.${encodeURIComponent(postId)}&device_id=eq.${encodeURIComponent(state.deviceId)}`, { method: "DELETE" }),
+        req(`/saves?post_id=eq.${encodeURIComponent(postId)}&device_id=eq.${encodeURIComponent(actorId())}`, { method: "DELETE" }),
       removeReaction: (postId, kind) =>
-        req(`/reactions?post_id=eq.${encodeURIComponent(postId)}&device_id=eq.${encodeURIComponent(state.deviceId)}&kind=eq.${encodeURIComponent(kind)}`, { method: "DELETE" })
+        req(`/reactions?post_id=eq.${encodeURIComponent(postId)}&device_id=eq.${encodeURIComponent(actorId())}&kind=eq.${encodeURIComponent(kind)}`, { method: "DELETE" })
     };
   };
 
@@ -208,22 +225,23 @@
       async listReactions() { return rd(RK, []); },
       async addReaction(postId, kind) {
         const all = rd(RK, []);
-        if (!all.some((r) => r.post_id === postId && r.device_id === state.deviceId && r.kind === kind))
-          all.push({ post_id: postId, device_id: state.deviceId, kind, name: state.name });
+        if (!all.some((r) => r.post_id === postId && r.device_id === actorId() && r.kind === kind))
+          all.push({ post_id: postId, device_id: actorId(), kind, name: myName() });
         wr(RK, all);
       },
       async removeReaction(postId, kind) {
-        wr(RK, rd(RK, []).filter((r) => !(r.post_id === postId && r.device_id === state.deviceId && r.kind === kind)));
+        wr(RK, rd(RK, []).filter((r) => !(r.post_id === postId && r.device_id === actorId() && r.kind === kind)));
       },
+      async listProfiles() { return []; },
       async listSaves() { return rd(SK, []); },
       async addSave(postId) {
         const all = rd(SK, []);
-        if (!all.some((x) => x.post_id === postId && x.device_id === state.deviceId))
-          all.push({ post_id: postId, device_id: state.deviceId, name: state.name });
+        if (!all.some((x) => x.post_id === postId && x.device_id === actorId()))
+          all.push({ post_id: postId, device_id: actorId(), name: myName() });
         wr(SK, all);
       },
       async removeSave(postId) {
-        wr(SK, rd(SK, []).filter((x) => !(x.post_id === postId && x.device_id === state.deviceId)));
+        wr(SK, rd(SK, []).filter((x) => !(x.post_id === postId && x.device_id === actorId())));
       },
       // demo-only: a few friends reply late to days the viewer already answered
       addLateSamples(days) {
@@ -253,12 +271,13 @@
   let mine = {};
   let reactions = {}; // postId -> { kind: { n, mine, names: [] } }
   let saves = {};     // postId -> { names: [], mine }
+  let profilesById = {}, profilesByName = {};
 
   function reindex() {
     postsByDay = {}; mine = {};
     for (const p of posts) {
       (postsByDay[p.day] = postsByDay[p.day] || []).push(p);
-      if (p.device_id === state.deviceId) mine[p.day] = p;
+      if (p.device_id === actorId()) mine[p.day] = p;
     }
     for (const d of Object.keys(postsByDay)) postsByDay[d].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
   }
@@ -269,7 +288,7 @@
       const k = (slot[r.kind] = slot[r.kind] || { n: 0, mine: false, names: [] });
       k.n += 1;
       k.names.push(r.name || "a friend");
-      if (r.device_id === state.deviceId) k.mine = true;
+      if (r.device_id === actorId()) k.mine = true;
     }
     return map;
   }
@@ -278,35 +297,49 @@
     for (const r of list) {
       const s = (map[r.post_id] = map[r.post_id] || { names: [], mine: false });
       s.names.push(r.name || "a friend");
-      if (r.device_id === state.deviceId) s.mine = true;
+      if (r.device_id === actorId()) s.mine = true;
     }
     return map;
   }
 
   async function loadAll() {
-    const [pr, po, re, sv] = await Promise.all([
+    const [pr, po, re, sv, pf] = await Promise.all([
       store.listPrompts(), store.listPosts(), store.listReactions(),
-      store.listSaves().catch(() => [])
+      store.listSaves().catch(() => []),
+      store.listProfiles().catch(() => [])
     ]);
+    profilesById = {}; profilesByName = {};
+    for (const x of pf || []) { profilesById[x.id] = x; profilesByName[x.username] = x; }
     promptsByDay = {};
     for (const r of pr || []) promptsByDay[r.day] = r;
     posts = po || [];
     reactions = buildReactionMap(re || []);
     saves = buildSaveMap(sv || []);
     reindex();
-    syncOldSaves();
+    syncSaves();
   }
-  // one-time: lists saved on this device before saves lived online get shared now
-  function syncOldSaves() {
-    if (state.savesSynced) return;
-    state.savesSynced = true; saveState();
-    for (const id of Object.keys(state.saved)) {
-      if (!posts.some((p) => p.id === id)) continue;
-      if (saves[id] && saves[id].mine) continue;
-      store.addSave(id).catch(() => { state.savesSynced = false; saveState(); });
-      const s = (saves[id] = saves[id] || { names: [], mine: false });
-      s.names.push(state.name || "a friend"); s.mine = true;
+  // Keeps "My list" and the online saves in step:
+  // lists saved on this device before saves lived online are shared once,
+  // and saves made elsewhere under this account show up here.
+  function syncSaves() {
+    if (!state.savesSynced) {
+      state.savesSynced = true;
+      for (const id of Object.keys(state.saved)) {
+        if (!posts.some((p) => p.id === id)) continue;
+        if (saves[id] && saves[id].mine) continue;
+        store.addSave(id).catch(() => { state.savesSynced = false; saveState(); });
+        const sv = (saves[id] = saves[id] || { names: [], mine: false });
+        sv.names.push(myName() || "a friend"); sv.mine = true;
+      }
     }
+    for (const [id, sv] of Object.entries(saves)) {
+      if (!sv.mine || state.saved[id]) continue;
+      const p = posts.find((x) => x.id === id);
+      if (!p) continue;
+      const row = promptsByDay[p.day] || {};
+      state.saved[id] = { id, title: p.title, category: row.category || "General", from: p.author_name, link: p.link || null, savedAt: Date.parse(p.created_at) || nowMs(), done: false };
+    }
+    saveState();
   }
 
   // ============================================================
@@ -405,14 +438,14 @@
   // ============================================================
   function toggleSave(post) {
     const slot = (saves[post.id] = saves[post.id] || { names: [], mine: false });
-    const me = state.name || "a friend";
+    const meName = myName() || "a friend";
     if (state.saved[post.id]) {
       delete state.saved[post.id];
       slot.mine = false;
-      const i = slot.names.indexOf(me); if (i >= 0) slot.names.splice(i, 1);
+      const i = slot.names.indexOf(meName); if (i >= 0) slot.names.splice(i, 1);
       store.removeSave(post.id).catch(() => {});
     } else {
-      slot.mine = true; slot.names.push(me);
+      slot.mine = true; slot.names.push(meName);
       store.addSave(post.id).catch(() => {});
       const row = promptsByDay[post.day] || {};
       state.saved[post.id] = {
@@ -470,13 +503,13 @@
     const slot = (reactions[post.id] = reactions[post.id] || {});
     const cur = (slot[kind] = slot[kind] || { n: 0, mine: false, names: [] });
     cur.names = cur.names || [];
-    const me = state.name || "a friend";
+    const meName = myName() || "a friend";
     const adding = !cur.mine;
     const flip = (add) => {
       cur.mine = add;
       cur.n = Math.max(0, cur.n + (add ? 1 : -1));
-      if (add) cur.names.push(me);
-      else { const i = cur.names.indexOf(me); if (i >= 0) cur.names.splice(i, 1); }
+      if (add) cur.names.push(meName);
+      else { const i = cur.names.indexOf(meName); if (i >= 0) cur.names.splice(i, 1); }
     };
     flip(adding);
     repaint();
@@ -492,15 +525,19 @@
     c.append(el("div", { class: "tape" }));
     if (opts.heading) c.append(el("p", { class: "prompt" }, opts.heading));
     c.append(el("h3", { class: "title", text: post.title }));
+    if (post.hidden) c.append(el("span", { class: "stamp hid", text: "hidden from others" }));
     if (post.confidence === "sure" || post.confidence === "vibes")
       c.append(el("span", { class: "stamp " + post.confidence, text: post.confidence === "sure" ? "strong opinion" : "just vibes" }));
     if (post.caption) c.append(el("p", { class: "caption", text: post.caption }));
     const lb = linkBlock(post.link);
     if (lb) c.append(lb);
-    c.append(el("p", { class: "meta", text: "— " + post.author_name + ", " + when }));
+    const prof = post.user_id && profilesById[post.user_id];
+    const meta = el("p", { class: "meta" }, "— ");
+    meta.append(prof ? el("a", { href: "#u=" + prof.username, text: post.author_name }) : post.author_name, ", " + when);
+    c.append(meta);
 
     const bar = el("div", { class: "reactions" });
-    const who = el("div", { class: "who" });
+    const who = el("div", { class: "whoreacted" });
     let graf = el("div");
     c.append(bar, who, graf);
 
@@ -528,6 +565,13 @@
       }
       const sv = saves[post.id];
       if (sv && sv.names.length) who.append(el("p", {}, el("b", { text: "On their list: " }), sv.names.join(", ")));
+      if (isAdmin()) {
+        bar.append(el("button", { class: "rbtn", type: "button", text: post.hidden ? "Unhide (admin)" : "Hide (admin)",
+          onclick: async () => {
+            try { await store.setHidden(post.id, !post.hidden); post.hidden = !post.hidden; render(); }
+            catch (ex) { alert("Couldn't change that: " + String(ex && ex.message || ex).slice(0, 120)); }
+          } }));
+      }
       const g = graffitiFor(post);
       graf.replaceWith(g);
       graf = g;
@@ -579,7 +623,7 @@
       btn.disabled = true;
       try {
         const row = await store.addPost({
-          day, author_name: state.name, device_id: state.deviceId,
+          day, author_name: myName(), device_id: actorId(), user_id: me ? me.id : undefined,
           title: t, caption: cap, link: lk || null, scope: "global", confidence
         });
         if (row) posts = [row, ...posts];
@@ -775,7 +819,7 @@
       if (day >= today) continue;
       const mineAt = Date.parse(my.created_at);
       for (const p of postsByDay[day] || []) {
-        if (p.device_id !== state.deviceId && Date.parse(p.created_at) > mineAt) out.push(p);
+        if (p.device_id !== actorId() && Date.parse(p.created_at) > mineAt) out.push(p);
       }
     }
     return out.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)).slice(0, 60);
@@ -795,6 +839,91 @@
     m.append(panel("Late to the Party", ...body));
     state.lateSeen = nowMs(); saveState();
     renderSidebar();
+  }
+
+  // ----- a member's profile -----
+  function renderProfile(username) {
+    const m = main(); m.textContent = "";
+    const prof = profilesByName[username];
+    if (!prof) { m.append(panel("Not found", el("p", { class: "empty", text: "Nobody here goes by that name." }))); return; }
+    const inviter = prof.invited_by && profilesById[prof.invited_by];
+    const joined = new Date(prof.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    const info = el("p", { class: "hint" }, "@" + prof.username + " · joined " + joined);
+    if (inviter) info.append(" · invited by ", el("a", { href: "#u=" + inviter.username, text: inviter.display_name }));
+    const body = [el("p", { class: "sentence big", text: prof.display_name }), info];
+    if (me && prof.id === me.id) body.push(el("p", {}, el("a", { href: "#invites", text: "Invite a friend" })));
+    if (isAdmin() && prof.id !== me.id) {
+      const msg = el("span", { class: "hint" });
+      body.push(el("div", { class: "row" },
+        el("button", { class: "btn small", type: "button", text: prof.blocked ? "Unblock (admin)" : "Block (admin)",
+          onclick: async () => {
+            try { await store.setBlocked(prof.id, !prof.blocked); prof.blocked = !prof.blocked; renderProfile(username); }
+            catch (ex) { msg.textContent = "Couldn't change that."; }
+          } }), msg));
+      if (prof.blocked) body.push(el("p", { class: "err", text: "This member is blocked." }));
+    }
+    m.append(panel("Profile", ...body));
+
+    const theirs = posts.filter((p) => p.user_id === prof.id).sort((a, b) => (a.day < b.day ? 1 : -1));
+    const visible = theirs.filter((p) => (me && prof.id === me.id) || mine[p.day]);
+    const cards = [];
+    if (!visible.length) cards.push(el("p", { class: "empty", text: "No answers to show yet." }));
+    for (const p of visible) {
+      const r = promptsByDay[p.day] || {};
+      const heading = el("a", { href: "#day=" + p.day, text: fmtDay(p.day, { weekday: "short", month: "short", day: "numeric" }) + " · " + (r.short_title || "") });
+      cards.push(makeCard(p, { heading }));
+    }
+    const hiddenN = theirs.length - visible.length;
+    if (hiddenN > 0) cards.push(el("p", { class: "hint", text: hiddenN + (hiddenN === 1 ? " more answer is" : " more answers are") + " on days you haven't answered yet." }));
+    m.append(panel("Answers", ...cards));
+  }
+
+  // ----- invite links -----
+  async function renderInvites() {
+    const m = main(); m.textContent = "";
+    const body = el("div", {});
+    m.append(panel("Invite a friend", body));
+    body.append(el("p", { class: "hint", text: "Loading..." }));
+    let list = [];
+    try {
+      const [inv, pf] = await Promise.all([store.listInvites(me.id), store.listProfiles().catch(() => null)]);
+      list = inv || [];
+      if (pf) { profilesById = {}; profilesByName = {}; for (const x of pf) { profilesById[x.id] = x; profilesByName[x.username] = x; } }
+    } catch (ex) {
+      body.textContent = "";
+      body.append(el("p", { class: "err", text: "Couldn't load your invites." }));
+      return;
+    }
+    body.textContent = "";
+    body.append(el("p", { text: isAdmin()
+      ? "Make a link and send it to a friend. As an admin you can make links that work for several people."
+      : "Make a link and send it to a friend. Each link lets one person join, and you can make up to 3." }));
+    const msg = el("p", { class: "err", role: "alert" });
+    const uses = el("input", { type: "number", min: "1", max: "100", value: "1", "aria-label": "How many people can use this link", style: "width:70px" });
+    const make = el("button", { class: "btn", type: "button", text: "Make a new invite link" });
+    make.addEventListener("click", async () => {
+      msg.textContent = ""; make.disabled = true;
+      try {
+        await store.rpc("create_invite", isAdmin() ? { p_uses: Math.max(1, Math.min(100, parseInt(uses.value, 10) || 1)) } : {});
+        renderInvites();
+      } catch (ex) {
+        msg.textContent = /invite_limit/.test(String(ex && ex.message)) ? "You've used all your invite links." : "Couldn't make a link. Try again in a moment.";
+        make.disabled = false;
+      }
+    });
+    body.append(el("div", { class: "row" }, make, isAdmin() ? el("label", {}, "people: ", uses) : null), msg);
+    for (const inv of list) {
+      const url = location.origin + location.pathname + "#invite=" + inv.code;
+      const joiners = Object.values(profilesById).filter((x) => x.invite_code === inv.code).map((x) => x.display_name);
+      const status = (inv.uses_left > 0 ? inv.uses_left + " left" : "used") + (joiners.length ? " · joined: " + joiners.join(", ") : "");
+      const copyMsg = el("span", { class: "ok" });
+      body.append(el("div", { class: "mail-row" },
+        el("span", { class: "t" }, url, el("small", { text: status })),
+        inv.uses_left > 0 ? el("button", { class: "btn small", type: "button", text: "Copy", onclick: async () => {
+          try { await navigator.clipboard.writeText(url); copyMsg.textContent = "Copied."; } catch { copyMsg.textContent = "Select and copy it by hand."; }
+        } }) : null, copyMsg));
+    }
+    if (!list.length) body.append(el("p", { class: "empty", text: "No invite links yet." }));
   }
 
   // ----- my list -----
@@ -844,13 +973,15 @@
     if (h === "inbox") return { view: "inbox" };
     if (h === "late") return { view: "late" };
     if (h === "list") return { view: "list" };
+    if (h === "invites") return { view: "invites" };
+    if (h.startsWith("u=")) return { view: "profile", username: decodeURIComponent(h.slice(2)).toLowerCase() };
     return { view: "day", day: todayKey() };
   }
 
   function renderSidebar() {
     const side = $("#side");
     side.textContent = "";
-    if (!state.name || !mine[todayKey()]) return;
+    if (!myName() || !mine[todayKey()]) return;
     const route = currentRoute();
     const today = todayKey();
     const todayRow = promptsByDay[today];
@@ -870,6 +1001,11 @@
       item("inbox", "Inbox", { active: route.view === "inbox", unread: inbox > 0, badge: inbox || 0 }),
       item("late", "Late to the Party", { active: route.view === "late", unread: late > 0, badge: late || 0 }),
       item("list", "My list", { active: route.view === "list", badge: saved || 0 }));
+    if (me) {
+      side.append(
+        item("u=" + me.username, "My profile", { active: route.view === "profile" && route.username === me.username }),
+        item("invites", "Invite a friend", { active: route.view === "invites" }));
+    }
 
     side.append(el("h4", { text: "Past days" }));
     const days = Object.keys(promptsByDay).filter((d) => d < today).sort().reverse();
@@ -905,13 +1041,35 @@
     else location.hash = hash;
   }
 
+  function authScreen() {
+    if (!REMOTE) return null;
+    if (Auth.session() && !me && profileChecked) return "join";
+    if (!Auth.session() && (cfg.REQUIRE_LOGIN || state.pendingInvite || login.linkError || location.hash === "#login")) return "login";
+    return null;
+  }
+
   function render() {
-    const named = !!state.name;
+    const screen = authScreen();
+    $("#win-login").hidden = screen !== "login";
+    $("#win-join").hidden = screen !== "join";
+    if (screen) {
+      $("#win-welcome").hidden = true; $("#shell").hidden = true; $("#demo-tools").hidden = true;
+      if (screen === "login") showLogin(); else showJoin();
+      return;
+    }
+    if (me && me.blocked) {
+      $("#win-welcome").hidden = true; $("#shell").hidden = false; $("#shell").classList.add("locked");
+      main().textContent = ""; main().append(panel("Account paused", el("p", { text: "This account has been paused. Talk to whoever invited you." })));
+      return;
+    }
+    const named = !!myName();
     $("#win-welcome").hidden = named;
+    $("#to-login-row").hidden = !REMOTE;
     $("#shell").hidden = !named;
     $("#demo-tools").hidden = REMOTE || !named;
     if (!named) { $("#name-input").focus(); return; }
-    $("#who").textContent = state.name;
+    $("#who").textContent = myName();
+    $("#rename").textContent = me ? "Log out" : "not you?";
 
     const shell = $("#shell");
     const today = todayKey();
@@ -926,7 +1084,9 @@
     if (route.view === "inbox") renderInbox();
     else if (route.view === "late") renderLate();
     else if (route.view === "list") renderListView();
-    else renderDay(route.day);
+    else if (route.view === "profile") renderProfile(route.username);
+    else if (route.view === "invites" && me) renderInvites();
+    else renderDay(route.view === "day" ? route.day : todayKey());
     window.scrollTo({ top: 0 });
   }
 
@@ -939,8 +1099,9 @@
     renderGate();
   }
 
+  const canWrite = () => !(REMOTE && Auth.session() && !me);
   async function refresh() {
-    try { await loadAll(); await ensureDay(todayKey()); gateDay = ""; render(); }
+    try { await loadAll(); if (canWrite()) await ensureDay(todayKey()); gateDay = ""; render(); }
     catch (ex) { showFatal(ex); }
   }
 
@@ -987,6 +1148,162 @@
   }
 
   // ============================================================
+  // accounts: login, joining with an invite, who am I
+  // ============================================================
+  const login = { step: "email", email: "", inviteOk: false, inviter: "", checked: false, linkError: false };
+  const byCode = () => cfg.LOGIN_METHOD === "code";
+
+  async function loadMe() {
+    me = null; profileChecked = false;
+    const u = Auth.user();
+    if (!u) { profileChecked = true; return; }
+    const prof = await store.getProfile(u.id);
+    if (!Auth.session()) { profileChecked = true; return; } // the login ended while we were asking
+    me = prof;
+    profileChecked = true;
+    if (!me) return;
+    if (state.accountId !== me.id) {
+      if (state.accountId) { state.saved = {}; state.dismissed = {}; state.joinedDay = ""; }
+      state.accountId = me.id; state.savesSynced = false;
+    }
+    if (!state.joinedDay) state.joinedDay = dayKeyOf(Date.parse(me.created_at) || nowMs());
+    if (!state.lateSeen) state.lateSeen = nowMs();
+    saveState();
+  }
+
+  // An invite link (#invite=CODE): remember the code, tidy the address bar, check it. Works on first load
+  // and when someone pastes an invite link into a tab that already has the site open.
+  async function takeInviteFromHash() {
+    const m = location.hash.match(/^#invite=([A-Za-z0-9]+)/);
+    if (!m) return false;
+    state.pendingInvite = m[1].toUpperCase(); saveState();
+    history.replaceState(null, "", location.pathname + location.search);
+    login.step = "email";
+    if (!Auth.session()) await checkInvite();
+    return true;
+  }
+
+  async function takeAuthFromHash() {
+    const r = await Auth.fromHash(location.hash);
+    if (!r) return false;
+    history.replaceState(null, "", location.pathname + location.search);
+    if (r.error) login.linkError = true;
+    return true;
+  }
+
+  async function checkInvite() {
+    login.checked = true;
+    login.inviteOk = false; login.inviter = "";
+    try {
+      const r = await store.rpc("check_invite", { p_code: state.pendingInvite });
+      if (r && r.valid) { login.inviteOk = true; login.inviter = r.inviter || ""; }
+    } catch { /* the SQL may not be installed yet: treat as not valid */ }
+  }
+
+  function showLogin() {
+    const banner = $("#login-invite");
+    if (state.pendingInvite && login.inviteOk) {
+      banner.hidden = false;
+      banner.textContent = (login.inviter ? login.inviter + " invited you." : "You've been invited.") + " Enter your email to join.";
+    } else if (state.pendingInvite) {
+      banner.hidden = false;
+      banner.textContent = "That invite link isn't valid, or it was already used. If you already have an account, log in below.";
+    } else {
+      banner.hidden = true;
+    }
+    $("#login-email-form").hidden = login.step !== "email";
+    $("#login-sentrow").hidden = login.step !== "code";
+    $("#login-code-form").hidden = !(login.step === "code" && byCode());
+    if (login.linkError) { $("#login-msg").textContent = "That link didn't work. It may have expired or already been used. Send yourself a new one."; login.linkError = false; }
+    $("#login-open").hidden = !!cfg.REQUIRE_LOGIN;
+    if (login.step === "email") $("#login-email").focus(); else if (byCode()) $("#login-code").focus();
+  }
+
+  function showJoin() {
+    const code = $("#join-code");
+    const u = Auth.user();
+    if (!code.value) code.value = (u && u.invite) || state.pendingInvite || "";
+    $("#join-email").textContent = u && u.email ? u.email : "";
+    $("#join-name").focus();
+  }
+
+  function wireAuthForms() {
+    const say = (id, t) => { $(id).textContent = t; };
+    $("#to-login").addEventListener("click", () => { location.hash = "login"; });
+    $("#login-skip").addEventListener("click", () => { state.pendingInvite = ""; saveState(); location.hash = ""; render(); });
+
+    $("#login-email-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      say("#login-msg", "");
+      const email = $("#login-email").value.trim().toLowerCase();
+      if (!email) return;
+      const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        const invited = !!(state.pendingInvite && login.inviteOk);
+        await Auth.sendCode(email, invited, invited ? state.pendingInvite : "");
+        login.email = email; login.step = "code";
+        say("#login-sent", byCode()
+          ? "We sent a code to " + email + ". It can take a minute. Check spam too."
+          : "We sent a link to " + email + ". Open the email and click the link. It can take a minute, and check spam too.");
+        render();
+      } catch (ex) {
+        say("#login-msg", ex.status === 429
+          ? "Too many tries. Wait a minute and try again."
+          : "Couldn't send a code. If you're new here, you need an invite link from a friend.");
+      }
+      btn.disabled = false;
+    });
+
+    $("#login-code-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      say("#login-msg", "");
+      const token = $("#login-code").value.replace(/\s+/g, "");
+      if (!token) return;
+      const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        await Auth.verify(login.email, token);
+        location.hash = ""; location.reload();
+      } catch (ex) {
+        say("#login-msg", "That code didn't work. Check it, or ask for a new one.");
+        btn.disabled = false;
+      }
+    });
+    $("#login-back").addEventListener("click", () => { login.step = "email"; say("#login-msg", ""); render(); });
+
+    $("#join-username").addEventListener("input", (e) => {
+      e.target.value = e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "");
+    });
+    $("#join-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      say("#join-msg", "");
+      const code = $("#join-code").value.trim().toUpperCase();
+      const dname = $("#join-name").value.trim();
+      const uname = $("#join-username").value.trim().toLowerCase();
+      if (!code) { say("#join-msg", "Paste your invite code."); return; }
+      if (!dname) { say("#join-msg", "Add your name."); return; }
+      if (!/^[a-z0-9_]{3,20}$/.test(uname)) { say("#join-msg", "Usernames are 3 to 20 letters, numbers or underscores."); return; }
+      const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+      try {
+        await store.rpc("redeem_invite", { p_code: code, p_username: uname, p_display_name: dname });
+        state.pendingInvite = ""; saveState();
+        location.hash = ""; location.reload();
+      } catch (ex) {
+        const t = String(ex && ex.message || "");
+        say("#join-msg",
+          /username_taken|duplicate|23505/.test(t) ? "That username is taken. Try another."
+          : /reserved_username/.test(t) ? "That username isn't available."
+          : /bad_username/.test(t) ? "Usernames are 3 to 20 letters, numbers or underscores."
+          : /bad_invite/.test(t) ? "That invite code isn't valid, or it was already used."
+          : /already_member/.test(t) ? "You already have an account. Reloading..."
+          : "Couldn't join. Try again in a moment.");
+        if (/already_member/.test(t)) setTimeout(() => location.reload(), 1200);
+        btn.disabled = false;
+      }
+    });
+    $("#join-logout").addEventListener("click", () => { Auth.signOut(); location.hash = ""; location.reload(); });
+  }
+
+  // ============================================================
   // boot
   // ============================================================
   async function boot() {
@@ -1008,18 +1325,38 @@
       render();
     });
     $("#rename").addEventListener("click", () => {
+      if (me || Auth.session()) {
+        Auth.signOut();
+        state.name = ""; state.saved = {}; state.dismissed = {}; state.joinedDay = ""; state.savesSynced = false; state.accountId = "";
+        saveState();
+        location.hash = ""; location.reload();
+        return;
+      }
       state.name = ""; saveState();
       $("#name-input").value = "";
       render();
     });
+    wireAuthForms();
     $("#menu-btn").addEventListener("click", () => $("#side").classList.toggle("open"));
-    window.addEventListener("hashchange", render);
+    window.addEventListener("hashchange", async () => {
+      if (REMOTE && /access_token=|error=/.test(location.hash)) { await takeAuthFromHash(); location.reload(); return; }
+      if (REMOTE && await takeInviteFromHash()) { if (me) { state.pendingInvite = ""; saveState(); } }
+      render();
+    });
     if (!REMOTE) wireDemoTools();
+
+    if (REMOTE) {
+      await takeAuthFromHash();   // arriving from the link in the login email
+      try { await loadMe(); } catch (ex) { showFatal(ex); return; }
+      await takeInviteFromHash();
+      if (me && state.pendingInvite) { state.pendingInvite = ""; saveState(); }
+      else if (!Auth.session() && state.pendingInvite && !login.checked) await checkInvite();
+    }
 
     try {
       await loadAll();
       if (!REMOTE && !Object.keys(promptsByDay).length) { await demoBootstrap(); await loadAll(); }
-      await ensureDay(todayKey());
+      if (canWrite()) await ensureDay(todayKey());
     } catch (ex) { showFatal(ex); return; }
     render();
 
@@ -1029,7 +1366,7 @@
       const t = todayKey();
       if (t === lastToday) return;
       lastToday = t;
-      try { await loadAll(); await ensureDay(t); gateDay = ""; render(); } catch { /* try again next minute */ }
+      try { await loadAll(); if (canWrite()) await ensureDay(t); gateDay = ""; render(); } catch { /* try again next minute */ }
     }, 60000);
   }
 

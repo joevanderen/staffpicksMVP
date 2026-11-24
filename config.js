@@ -1,7 +1,7 @@
 // Everything you'd likely want to tweak lives here.
 // The prompts themselves live in prompts.csv (master list) -> prompts.js (generated).
 window.APP_CONFIG = {
-  SITE_NAME: "Staff Picks",
+  SITE_NAME: "The Algorhythm",
   TAGLINE: "one question a day, answered by people you actually know",
 
   // Leave both empty to run in DEMO MODE (everything stays on your own device).
@@ -10,6 +10,15 @@ window.APP_CONFIG = {
   SUPABASE_ANON_KEY: "sb_publishable_FaXvjl6-mz43tQkMv4cFKA_G6SHK2u3",
 
   CAPTION_MAX: 300,
+
+  // false = people can still use the site with just a name (during the switch to accounts).
+  // true  = everyone must log in. Flip this after your friends have joined and been linked.
+  REQUIRE_LOGIN: false,
+
+  // How people log in from the email we send:
+  //   "link" = click the link in the email (works with Supabase's built-in email, no setup)
+  //   "code" = type a 6-digit code (needs your own email sender set up in Supabase, with {{ .Token }} in the templates)
+  LOGIN_METHOD: "link",
 
   // A new day starts at 6:00 AM Buenos Aires time. Argentina is UTC-3 all year,
   // so that is 09:00 UTC. (Change this number if you want a different start hour.)

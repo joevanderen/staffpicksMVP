@@ -47,3 +47,15 @@ Pasting a link adds a smart button ("Listen on Spotify", "Watch on YouTube", "Op
 ## Updating a live site (update 1)
 1. In Supabase, run `supabase-update-1.sql` (it only adds things; nothing is deleted).
 2. Then upload the new site files to GitHub, replacing the old ones (keep your config.js keys).
+
+## Accounts (update 2)
+Do these in order.
+
+1. **Supabase, SQL Editor:** run `supabase-update-2.sql` (after update 1). The last result shows `your_admin_invite_code`. Copy it.
+2. **Supabase, Authentication, URL Configuration:** set **Site URL** to your site address (for now your GitHub address, for example `https://joevanderen.github.io/YOUR-REPO/`). Under **Redirect URLs** add `https://joevanderen.github.io/**` and, once it works, `https://thealgorhythm.org/**`. The login email's link sends people back to these addresses, so this step matters.
+3. (Later, optional) **Codes instead of links:** once you connect your own email sender in Supabase (Authentication, Emails, SMTP), you can edit the templates to include `{{ .Token }}`, then set `LOGIN_METHOD: "code"` in `config.js`. Until then, `"link"` (the default) works with Supabase's built-in email.
+4. **GitHub:** upload ALL the files from this folder over the old ones. There is a new file, `auth.js`, so don't skip it.
+5. **Open your site with your admin invite:** `https://YOUR-SITE/#invite=YOUR_CODE`. Enter your email, then the code from the email, then pick your name (like "Joe V.") and a username.
+6. **Link old answers:** open `supabase-link-friends.sql`, run the first two queries, then run `select link_old_data('yourusername', 'TheNameYouTypedBefore');` for each person right after they join, before they answer anything new.
+7. **Invite friends:** in the site, "Invite a friend" makes links (as admin you can make links that several people can use).
+8. **When everyone has joined and been linked:** run `supabase-lock.sql` and set `REQUIRE_LOGIN: true` in `config.js`.

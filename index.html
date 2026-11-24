@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Staff Picks</title>
+  <title>The Algorhythm</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Special+Elite&display=swap" rel="stylesheet">
@@ -25,6 +25,56 @@
             <input id="name-input" maxlength="40" required autocomplete="nickname" placeholder="What should we call you?">
             <button class="btn" type="submit">OK</button>
           </form>
+          <p class="hint" id="to-login-row" hidden>Have an invite or an account? <button class="linklike" id="to-login" type="button">Log in</button></p>
+        </div>
+      </section>
+
+      <!-- Log in -->
+      <section class="win welcome" id="win-login" hidden>
+        <div class="titlebar"><span>Log in.exe</span></div>
+        <div class="win-body">
+          <h1 class="site-name" data-site-name></h1>
+          <p class="tagline" data-tagline></p>
+          <p class="note" id="login-invite" hidden></p>
+          <form id="login-email-form" class="authform">
+            <label class="field"><span>Your email</span>
+              <input id="login-email" type="email" required autocomplete="email" inputmode="email" placeholder="you@example.com"></label>
+            <div class="row"><button class="btn" type="submit">Send me a code</button></div>
+            <p class="hint">No password. We email you a link to log in, each time you use a new device.</p>
+          </form>
+          <div id="login-sentrow" hidden>
+            <p class="note" id="login-sent"></p>
+            <form id="login-code-form" class="authform" hidden>
+              <label class="field"><span>Code from the email</span>
+                <input id="login-code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="123456"></label>
+              <div class="row"><button class="btn" type="submit">Log in</button></div>
+            </form>
+            <div class="row"><button class="linklike" id="login-back" type="button">Use a different email</button></div>
+          </div>
+          <p class="err" id="login-msg" role="alert"></p>
+          <p class="hint" id="login-open" hidden><button class="linklike" id="login-skip" type="button">Keep using just a name for now</button></p>
+        </div>
+      </section>
+
+      <!-- Join with an invite -->
+      <section class="win welcome" id="win-join" hidden>
+        <div class="titlebar"><span>Join.exe</span></div>
+        <div class="win-body">
+          <h1 class="site-name" data-site-name></h1>
+          <p>Logged in as <b id="join-email"></b>. One last step: pick how you'll show up.</p>
+          <form id="join-form" class="authform">
+            <label class="field"><span>Invite code</span>
+              <input id="join-code" maxlength="20" autocomplete="off" required placeholder="From your invite link"></label>
+            <label class="field"><span>Your name</span>
+              <input id="join-name" maxlength="40" autocomplete="name" required placeholder="First name and last initial, like Joe V.">
+              <p class="hint">This is what shows on your answers.</p></label>
+            <label class="field"><span>Username</span>
+              <input id="join-username" maxlength="20" autocomplete="username" autocapitalize="off" required placeholder="joev">
+              <p class="hint">3 to 20 letters, numbers or underscores. Yours alone, so choose one you like.</p></label>
+            <div class="row"><button class="btn" type="submit">Join</button>
+              <button class="linklike" id="join-logout" type="button">Log out</button></div>
+          </form>
+          <p class="err" id="join-msg" role="alert"></p>
         </div>
       </section>
 
@@ -63,6 +113,7 @@
 
   <script src="config.js"></script>
   <script src="prompts.js"></script>
+  <script src="auth.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
