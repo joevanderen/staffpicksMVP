@@ -131,9 +131,10 @@ label.field em { font-weight: normal; color: #555; font-style: normal; margin-le
 }
 .ask-box.idle { color: #777; }
 .ask-box .ask-text { display: block; transition: filter .12s linear; }
-.recent { font-size: 12px; margin: 10px 2px 0; line-height: 1.7; }
-.recent b { font-family: var(--type); }
-.recent span.ln { color: #0000ee; text-decoration: underline; margin-right: 10px; white-space: nowrap; }
+.recent { font-size: 12px; margin: 10px 2px 0; line-height: 1.5; display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.recent b { font-family: var(--type); flex-basis: 100%; }
+.recent span.ln { color: #333; min-width: 0; overflow-wrap: anywhere; }
+.recent span.ln::before { content: "· "; }
 .skipline { margin: 6px 2px 0; font-size: 12px; min-height: 18px; }
 
 /* ---------- Inbox ---------- */
