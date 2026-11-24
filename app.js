@@ -46,7 +46,7 @@
   // ============================================================
   const KEY = "staffpicks.v2";
   function freshState() {
-    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, savesSynced: false, accountId: "", pendingInvite: "", demoOffset: 0 };
+    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, savesSynced: false, accountId: "", pendingInvite: "", commentsSeen: 0, demoOffset: 0 };
   }
   function loadState() {
     try { return Object.assign(freshState(), JSON.parse(localStorage.getItem(KEY) || "{}")); }
@@ -110,6 +110,10 @@
       listInvites: (id) => req("/invites?select=*&created_by=eq." + encodeURIComponent(id) + "&order=created_at.desc"),
       setHidden: (postId, hidden) => req("/posts?id=eq." + encodeURIComponent(postId), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ hidden }) }),
       setBlocked: (id, blocked) => req("/profiles?id=eq." + encodeURIComponent(id), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ blocked }) }),
+      listComments: () => req("/comments?select=*&order=created_at.asc&limit=5000"),
+      addComment: (row) => req("/comments", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(row) }).then((r) => r && r[0]),
+      deleteComment: (id) => req("/comments?id=eq." + encodeURIComponent(id), { method: "DELETE" }),
+      setCommentHidden: (id, hidden) => req("/comments?id=eq." + encodeURIComponent(id), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ hidden }) }),
       listPrompts: () => req("/daily_prompts?select=*&order=day.desc&limit=2000"),
       async addPrompt(row) {
         try {
@@ -233,6 +237,7 @@
         wr(RK, rd(RK, []).filter((r) => !(r.post_id === postId && r.device_id === actorId() && r.kind === kind)));
       },
       async listProfiles() { return []; },
+      async listComments() { return []; },
       async listSaves() { return rd(SK, []); },
       async addSave(postId) {
         const all = rd(SK, []);
@@ -272,6 +277,8 @@
   let reactions = {}; // postId -> { kind: { n, mine, names: [] } }
   let saves = {};     // postId -> { names: [], mine }
   let profilesById = {}, profilesByName = {};
+  let commentsByPost = {};  // postId -> [comment, ...] oldest first
+  const commentsOpen = new Set();
 
   function reindex() {
     postsByDay = {}; mine = {};
@@ -303,11 +310,14 @@
   }
 
   async function loadAll() {
-    const [pr, po, re, sv, pf] = await Promise.all([
+    const [pr, po, re, sv, pf, cm] = await Promise.all([
       store.listPrompts(), store.listPosts(), store.listReactions(),
       store.listSaves().catch(() => []),
-      store.listProfiles().catch(() => [])
+      store.listProfiles().catch(() => []),
+      store.listComments().catch(() => [])
     ]);
+    commentsByPost = {};
+    for (const c of cm || []) (commentsByPost[c.post_id] = commentsByPost[c.post_id] || []).push(c);
     profilesById = {}; profilesByName = {};
     for (const x of pf || []) { profilesById[x.id] = x; profilesByName[x.username] = x; }
     promptsByDay = {};
@@ -540,6 +550,7 @@
     const who = el("div", { class: "whoreacted" });
     let graf = el("div");
     c.append(bar, who, graf);
+    if (me) c.append(commentsBlock(post, !!opts.openComments));
 
     function paint() {
       bar.textContent = "";
@@ -841,6 +852,106 @@
     renderSidebar();
   }
 
+  // ----- comments -----
+  const COMMENT_MAX = 200;
+
+  // posts I wrote, or have commented on
+  function involvedPostIds() {
+    const ids = new Set();
+    for (const p of posts) if (me && p.user_id === me.id) ids.add(p.id);
+    for (const [pid, list] of Object.entries(commentsByPost)) if (me && list.some((c) => c.user_id === me.id)) ids.add(pid);
+    return ids;
+  }
+  function unseenList() {
+    if (!me) return [];
+    const ids = involvedPostIds();
+    const out = [];
+    for (const pid of ids) {
+      for (const c of commentsByPost[pid] || []) {
+        if (c.user_id !== me.id && !c.hidden && Date.parse(c.created_at) > state.commentsSeen) out.push(c);
+      }
+    }
+    return out;
+  }
+  const unseenCount = () => unseenList().length;
+
+  function commentsBlock(post, startOpen) {
+    const wrap = el("div", { class: "comments" });
+    let open = startOpen || commentsOpen.has(post.id);
+    function paint() {
+      wrap.textContent = "";
+      const list = (commentsByPost[post.id] || []).filter((c) => !c.hidden || c.user_id === me.id || isAdmin());
+      wrap.append(el("button", {
+        class: "linklike", type: "button", "aria-expanded": String(open),
+        text: (open ? "Hide comments" : "Comments") + (list.length ? " (" + list.length + ")" : ""),
+        onclick: () => { open = !open; if (open) commentsOpen.add(post.id); else commentsOpen.delete(post.id); paint(); }
+      }));
+      if (!open) return;
+      for (const c of list) {
+        const prof = profilesById[c.user_id];
+        const when = new Date(c.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+        const p = el("p", { class: "comment" + (c.hidden ? " is-hidden" : "") },
+          prof ? el("a", { href: "#u=" + prof.username, text: c.author_name }) : el("b", { text: c.author_name }),
+          " " + c.body + " ", el("small", { text: when + (c.hidden ? " · hidden from others" : "") }));
+        if (c.user_id === me.id) {
+          p.append(" ", el("button", { class: "linklike small", type: "button", text: "delete", onclick: async () => {
+            try { await store.deleteComment(c.id); commentsByPost[post.id] = (commentsByPost[post.id] || []).filter((x) => x.id !== c.id); paint(); }
+            catch { /* leave it; try again */ }
+          } }));
+        } else if (isAdmin()) {
+          p.append(" ", el("button", { class: "linklike small", type: "button", text: c.hidden ? "unhide" : "hide", onclick: async () => {
+            try { await store.setCommentHidden(c.id, !c.hidden); c.hidden = !c.hidden; paint(); } catch { /* ignore */ }
+          } }));
+        }
+        wrap.append(p);
+      }
+      const input = el("input", { maxlength: String(COMMENT_MAX), "aria-label": "Add a comment", placeholder: "Add a comment (" + COMMENT_MAX + " characters max)" });
+      const err = el("span", { class: "err", role: "alert" });
+      const form = el("form", { class: "comment-form" }, input, el("button", { class: "btn small", type: "submit", text: "Post" }), err);
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const body = input.value.trim().slice(0, COMMENT_MAX);
+        if (!body) return;
+        err.textContent = "";
+        try {
+          const row = await store.addComment({ post_id: post.id, user_id: me.id, author_name: myName(), body });
+          if (row) (commentsByPost[post.id] = commentsByPost[post.id] || []).push(row);
+          commentsOpen.add(post.id);
+          paint();
+        } catch { err.textContent = "Couldn't post that. Try again."; }
+      });
+      wrap.append(form);
+    }
+    paint();
+    return wrap;
+  }
+
+  // everything said on posts I wrote or joined, newest conversation first
+  function renderComments() {
+    const m = main(); m.textContent = "";
+    const ids = involvedPostIds();
+    const rows = [];
+    for (const pid of ids) {
+      const post = posts.find((x) => x.id === pid);
+      const list = (commentsByPost[pid] || []).filter((c) => !c.hidden || isAdmin());
+      if (!post || !list.length) continue;
+      rows.push({ post, last: Math.max(...list.map((c) => Date.parse(c.created_at))) });
+    }
+    rows.sort((a, b) => b.last - a.last);
+    const body = [el("p", { class: "hint", text: "Comments on your answers, and on answers you've commented on." })];
+    if (!rows.length) body.push(el("p", { class: "empty", text: "No comments yet." }));
+    for (const { post } of rows) {
+      const r = promptsByDay[post.day] || {};
+      const heading = el("a", { href: "#day=" + post.day, text: fmtDay(post.day, { weekday: "short", month: "short", day: "numeric" }) + " · " + (r.short_title || "") });
+      body.push(makeCard(post, { heading, openComments: true }));
+    }
+    m.append(panel("Comments", ...body));
+    // a server clock slightly ahead of this device must not leave the badge stuck
+    const newest = Math.max(0, ...Object.values(commentsByPost).flat().map((c) => Date.parse(c.created_at) || 0));
+    state.commentsSeen = Math.max(nowMs(), Math.min(newest, nowMs() + 10 * 60e3)); saveState();
+    renderSidebar();
+  }
+
   // ----- a member's profile -----
   function renderProfile(username) {
     const m = main(); m.textContent = "";
@@ -974,6 +1085,7 @@
     if (h === "late") return { view: "late" };
     if (h === "list") return { view: "list" };
     if (h === "invites") return { view: "invites" };
+    if (h === "comments") return { view: "comments" };
     if (h.startsWith("u=")) return { view: "profile", username: decodeURIComponent(h.slice(2)).toLowerCase() };
     return { view: "day", day: todayKey() };
   }
@@ -1003,6 +1115,7 @@
       item("list", "My list", { active: route.view === "list", badge: saved || 0 }));
     if (me) {
       side.append(
+        item("comments", "Comments", { active: route.view === "comments", unread: unseenCount() > 0, badge: unseenCount() || 0 }),
         item("u=" + me.username, "My profile", { active: route.view === "profile" && route.username === me.username }),
         item("invites", "Invite a friend", { active: route.view === "invites" }));
     }
@@ -1086,6 +1199,7 @@
     else if (route.view === "list") renderListView();
     else if (route.view === "profile") renderProfile(route.username);
     else if (route.view === "invites" && me) renderInvites();
+    else if (route.view === "comments" && me) renderComments();
     else renderDay(route.view === "day" ? route.day : todayKey());
     window.scrollTo({ top: 0 });
   }
@@ -1164,10 +1278,11 @@
     if (!me) return;
     if (state.accountId !== me.id) {
       if (state.accountId) { state.saved = {}; state.dismissed = {}; state.joinedDay = ""; }
-      state.accountId = me.id; state.savesSynced = false;
+      state.accountId = me.id; state.savesSynced = false; state.commentsSeen = nowMs();
     }
     if (!state.joinedDay) state.joinedDay = dayKeyOf(Date.parse(me.created_at) || nowMs());
     if (!state.lateSeen) state.lateSeen = nowMs();
+    if (!state.commentsSeen) state.commentsSeen = nowMs();
     saveState();
   }
 
@@ -1327,7 +1442,7 @@
     $("#rename").addEventListener("click", () => {
       if (me || Auth.session()) {
         Auth.signOut();
-        state.name = ""; state.saved = {}; state.dismissed = {}; state.joinedDay = ""; state.savesSynced = false; state.accountId = "";
+        state.name = ""; state.saved = {}; state.dismissed = {}; state.joinedDay = ""; state.savesSynced = false; state.accountId = ""; state.commentsSeen = 0;
         saveState();
         location.hash = ""; location.reload();
         return;

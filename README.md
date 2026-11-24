@@ -59,3 +59,8 @@ Do these in order.
 6. **Link old answers:** open `supabase-link-friends.sql`, run the first two queries, then run `select link_old_data('yourusername', 'TheNameYouTypedBefore');` for each person right after they join, before they answer anything new.
 7. **Invite friends:** in the site, "Invite a friend" makes links (as admin you can make links that several people can use).
 8. **When everyone has joined and been linked:** run `supabase-lock.sql` and set `REQUIRE_LOGIN: true` in `config.js`.
+
+## Comments (update 3)
+1. In Supabase's SQL Editor, run `supabase-update-3.sql`.
+2. Upload all the files to GitHub over the old ones.
+Comments are for logged-in members only, 200 characters, shown under each post.

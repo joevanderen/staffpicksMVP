@@ -222,3 +222,14 @@ label.field em { font-weight: normal; color: #555; font-style: normal; margin-le
 .stamp.hid { color: #555; border-color: #555; }
 .authform input { width: 100%; box-sizing: border-box; }
 .authform .row { margin-top: 10px; }
+
+/* comments */
+.comments { position: relative; z-index: 2; margin-top: 8px; font-size: 13px; }
+.comments .comment { margin: 6px 0; padding-left: 8px; border-left: 3px solid #b9ad84; line-height: 1.35; }
+.comments .comment.is-hidden { opacity: .6; }
+.comments .comment a, .comments .comment b { font-weight: bold; }
+.comments .comment small { color: #6a6248; }
+.comments .linklike { padding: 2px 0; font-size: 12px; }
+.comments .linklike.small { font-size: 11px; }
+.comment-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.comment-form input { flex: 1; min-width: 160px; font: inherit; font-size: 13px; padding: 4px 6px; }
