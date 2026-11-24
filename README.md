@@ -64,3 +64,8 @@ Do these in order.
 1. In Supabase's SQL Editor, run `supabase-update-3.sql`.
 2. Upload all the files to GitHub over the old ones.
 Comments are for logged-in members only, 200 characters, shown under each post.
+
+## Card designer (update 4)
+1. In Supabase's SQL Editor, run `supabase-update-4.sql`.
+2. Upload all the files to GitHub over the old ones. There is a new file, `cardstyle.js`.
+Members open "Design my card" in the sidebar. Their look applies to their new answers.

@@ -532,9 +532,10 @@
     const when = new Date(post.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
     const c = el("article", { class: "card" });
     c.style.setProperty("--tilt", ((rand() - 0.5) * 2.4).toFixed(2) + "deg");
+    const ts = CardStyle.apply(c, post.card_style);   // -1 = the normal look
     c.append(el("div", { class: "tape" }));
     if (opts.heading) c.append(el("p", { class: "prompt" }, opts.heading));
-    c.append(el("h3", { class: "title", text: post.title }));
+    c.append(el("h3", { class: "title" + (ts >= 0 ? " ts-" + ts : ""), text: post.title }));
     if (post.hidden) c.append(el("span", { class: "stamp hid", text: "hidden from others" }));
     if (post.confidence === "sure" || post.confidence === "vibes")
       c.append(el("span", { class: "stamp " + post.confidence, text: post.confidence === "sure" ? "strong opinion" : "just vibes" }));
@@ -545,6 +546,7 @@
     const meta = el("p", { class: "meta" }, "— ");
     meta.append(prof ? el("a", { href: "#u=" + prof.username, text: post.author_name }) : post.author_name, ", " + when);
     c.append(meta);
+    if (opts.preview) return c;
 
     const bar = el("div", { class: "reactions" });
     const who = el("div", { class: "whoreacted" });
@@ -635,6 +637,7 @@
       try {
         const row = await store.addPost({
           day, author_name: myName(), device_id: actorId(), user_id: me ? me.id : undefined,
+          card_style: me && CardStyle.valid(me.card_style) ? me.card_style : undefined,
           title: t, caption: cap, link: lk || null, scope: "global", confidence
         });
         if (row) posts = [row, ...posts];
@@ -849,6 +852,161 @@
     }
     m.append(panel("Late to the Party", ...body));
     state.lateSeen = nowMs(); saveState();
+    renderSidebar();
+  }
+
+  // ----- the card designer -----
+  const BASIC_COLORS = [
+    "#ff8080","#ffff80","#80ff80","#00ff80","#80ffff","#0080ff","#ff80c0","#ff80ff",
+    "#ff0000","#ffff00","#80ff00","#00ff40","#00ffff","#0080c0","#8080c0","#ff00ff",
+    "#804040","#ff8040","#00ff00","#008080","#004080","#8080ff","#800040","#ff0080",
+    "#800000","#ff8000","#008000","#008040","#0000ff","#0000a0","#800080","#8000ff",
+    "#400000","#804000","#004000","#004040","#000080","#000040","#400040","#400080",
+    "#000000","#808000","#808040","#808080","#408080","#c0c0c0","#fdf6dc","#ffffff"
+  ];
+
+  // An old-Windows color dialog: 48 basic colors, a rainbow square, a brightness slider, and a hex box.
+  function colorDialog(initial, onPick) {
+    const root = el("div", { class: "color-dialog" });
+    const grid = el("div", { class: "grid48", role: "group", "aria-label": "Basic colors" });
+    const sws = BASIC_COLORS.map((hex) => {
+      const b = el("button", { class: "sw", type: "button", "aria-label": hex, "aria-pressed": "false", title: hex, style: "background:" + hex });
+      b.addEventListener("click", () => pick(hex));
+      grid.append(b);
+      return b;
+    });
+    const canvas = el("canvas", { width: "280", height: "120", role: "img", "aria-label": "Rainbow color picker. Use the hex box for exact colors." });
+    const ctx = canvas.getContext("2d");
+    const g1 = ctx.createLinearGradient(0, 0, 280, 0);
+    for (let i = 0; i <= 6; i++) g1.addColorStop(i / 6, "hsl(" + (i * 60) + ",100%,50%)");
+    ctx.fillStyle = g1; ctx.fillRect(0, 0, 280, 120);
+    const g2 = ctx.createLinearGradient(0, 0, 0, 120);
+    g2.addColorStop(0, "rgba(128,128,128,0)"); g2.addColorStop(1, "rgba(128,128,128,1)");
+    ctx.fillStyle = g2; ctx.fillRect(0, 0, 280, 120);
+    const light = el("input", { type: "range", min: "5", max: "95", value: "50", "aria-label": "Brightness" });
+    const hex = el("input", { type: "text", maxlength: "7", "aria-label": "Hex color", spellcheck: "false" });
+    const chip = el("span", { class: "newchip" });
+    let hs = [0, 0];
+    const fromPicker = () => pick(CardStyle.hslToHex(hs[0], hs[1], +light.value));
+    function at(e) {
+      const r = canvas.getBoundingClientRect();
+      const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)), y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+      hs = [x * 360, (1 - y) * 100];
+      fromPicker();
+    }
+    let down = false;
+    canvas.addEventListener("pointerdown", (e) => { down = true; try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ } at(e); });
+    canvas.addEventListener("pointermove", (e) => { if (down) at(e); });
+    canvas.addEventListener("pointerup", () => { down = false; });
+    light.addEventListener("input", () => { if (hs[1] > 0 || hs[0] > 0) fromPicker(); });
+    hex.addEventListener("change", () => {
+      const v = "#" + hex.value.trim().replace(/^#/, "");
+      if (CardStyle.HEX.test(v)) pick(v.toLowerCase());
+      else hex.value = chip.dataset.hex || "";
+    });
+    function show(h) {
+      chip.dataset.hex = h; chip.style.background = h; hex.value = h;
+      sws.forEach((b) => b.setAttribute("aria-pressed", String(b.title === h)));
+    }
+    function pick(h) { show(h); onPick(h); }
+    root.append(el("div", {}, "Basic colors:"), grid, el("div", {}, "Mix your own:"), canvas,
+      el("div", { class: "mix" }, el("label", {}, "Brightness ", light), chip, hex));
+    show(initial);
+    return { el: root, set: show };
+  }
+
+  function renderDesigner() {
+    const m = main(); m.textContent = "";
+    const saved = CardStyle.valid(me.card_style) ? me.card_style : null;
+    const draft = Object.assign({}, CardStyle.DEFAULT, saved || {});
+    let editing = "bg";
+    const FIELDS = [["bg", "Card color"], ["fg", "Text color"], ["tc", "Title color"]];
+
+    const previewHost = el("div", { class: "design-preview" });
+    const status = el("div", { class: "contrast" });
+    const msg = el("p", { class: "hint", role: "status" });
+    const saveBtn = el("button", { class: "btn", type: "button", text: "Save my card look" });
+    const resetBtn = el("button", { class: "btn", type: "button", text: "Back to the plain look" });
+    const tsGrid = el("div", { class: "ts-grid", role: "group", "aria-label": "Title style" });
+    const colorRow = el("div", { class: "color-row" });
+    const dialogHost = el("div");
+    let dialog = null;
+
+    function paintPreview() {
+      const fake = {
+        id: "preview", user_id: me.id, author_name: myName(), created_at: new Date().toISOString(),
+        title: "Your answer goes here", caption: "This is how the little caption under your answer will look. Make it yours.",
+        link: null, card_style: draft
+      };
+      previewHost.textContent = "";
+      previewHost.append(el("p", { class: "hint", text: "Preview" }), makeCard(fake, { preview: true }));
+    }
+    function paintStatus() {
+      status.textContent = "";
+      const t = CardStyle.ratio(draft.fg, draft.bg), h = CardStyle.ratio(draft.tc, draft.bg);
+      const line = (label, ok, r, min) => el("p", {}, label + ": ",
+        el("span", { class: ok ? "good" : "bad", text: ok ? "easy to read" : "too hard to read" }),
+        el("small", { text: "  (" + r.toFixed(1) + " : 1, needs " + min + ")" }));
+      status.append(line("Text on card", CardStyle.textOk(draft), t, CardStyle.MIN_TEXT), line("Title on card", CardStyle.titleOk(draft), h, CardStyle.MIN_TITLE));
+      const ok = CardStyle.readable(draft);
+      if (!ok) {
+        status.append(el("button", { class: "btn small", type: "button", text: "Fix it for me", onclick: () => {
+          if (!CardStyle.textOk(draft)) draft.fg = CardStyle.fix(draft.fg, draft.bg, CardStyle.MIN_TEXT + 0.5);
+          if (!CardStyle.titleOk(draft)) draft.tc = CardStyle.fix(draft.tc, draft.bg, CardStyle.MIN_TITLE + 0.5);
+          paintAll();
+        } }), el("p", { class: "hint", text: "This keeps your card color and adjusts the text colors just enough." }));
+      }
+      saveBtn.disabled = !ok;
+    }
+    function paintTitles() {
+      tsGrid.textContent = "";
+      CardStyle.TITLE_STYLES.forEach((name, i) => {
+        const b = el("button", { class: "ts-btn", type: "button", "aria-pressed": String(draft.t === i), onclick: () => { draft.t = i; paintAll(); } },
+          el("span", { class: "title ts-" + i, text: "Aa Title" }), el("small", { text: name }));
+        b.style.setProperty("--cbg", draft.bg); b.style.setProperty("--cfg", draft.fg); b.style.setProperty("--ctc", draft.tc);
+        tsGrid.append(b);
+      });
+    }
+    function paintColors() {
+      colorRow.textContent = "";
+      for (const [key, label] of FIELDS) {
+        const b = el("button", { class: "color-btn", type: "button", "aria-pressed": String(editing === key), onclick: () => { editing = key; paintColors(); dialog.set(draft[key]); } },
+          el("span", { class: "chip", style: "background:" + draft[key] }), label);
+        colorRow.append(b);
+      }
+    }
+    function paintAll() { paintTitles(); paintColors(); paintPreview(); paintStatus(); if (dialog) dialog.set(draft[editing]); msg.textContent = ""; }
+
+    dialog = colorDialog(draft[editing], (hexv) => { draft[editing] = hexv; paintTitles(); paintColors(); paintPreview(); paintStatus(); msg.textContent = ""; });
+    dialogHost.append(dialog.el);
+
+    saveBtn.addEventListener("click", async () => {
+      if (!CardStyle.readable(draft)) return;
+      saveBtn.disabled = true;
+      try {
+        await store.rpc("set_card_style", { p_style: { t: draft.t, bg: draft.bg, fg: draft.fg, tc: draft.tc } });
+        me.card_style = { t: draft.t, bg: draft.bg, fg: draft.fg, tc: draft.tc };
+        msg.textContent = "Saved. Your next answers will use this look.";
+      } catch { msg.textContent = "Couldn't save that. Try again in a moment."; }
+      saveBtn.disabled = !CardStyle.readable(draft);
+    });
+    resetBtn.addEventListener("click", async () => {
+      try {
+        await store.rpc("set_card_style", { p_style: null });
+        me.card_style = null;
+        Object.assign(draft, CardStyle.DEFAULT); editing = "bg";
+        paintAll(); msg.textContent = "Back to the plain look.";
+      } catch { msg.textContent = "Couldn't reset that. Try again in a moment."; }
+    });
+
+    const left = el("div", {},
+      el("h4", { text: "1. Title style" }), tsGrid,
+      el("h4", { text: "2. Colors" }), colorRow, dialogHost,
+      el("h4", { text: "3. Is it readable?" }), status,
+      el("div", { class: "row", style: "margin-top:10px" }, saveBtn, resetBtn), msg);
+    m.append(panel("Design my card", el("p", { class: "hint", style: "margin-bottom:12px", text: "Your look is saved on each answer you post, so older answers keep the look they had. Posts you've already made don't change." }),
+      el("div", { class: "design" }, left, previewHost)));
+    paintAll();
     renderSidebar();
   }
 
@@ -1086,6 +1244,7 @@
     if (h === "list") return { view: "list" };
     if (h === "invites") return { view: "invites" };
     if (h === "comments") return { view: "comments" };
+    if (h === "design") return { view: "design" };
     if (h.startsWith("u=")) return { view: "profile", username: decodeURIComponent(h.slice(2)).toLowerCase() };
     return { view: "day", day: todayKey() };
   }
@@ -1116,6 +1275,7 @@
     if (me) {
       side.append(
         item("comments", "Comments", { active: route.view === "comments", unread: unseenCount() > 0, badge: unseenCount() || 0 }),
+        item("design", "Design my card", { active: route.view === "design" }),
         item("u=" + me.username, "My profile", { active: route.view === "profile" && route.username === me.username }),
         item("invites", "Invite a friend", { active: route.view === "invites" }));
     }
@@ -1200,6 +1360,7 @@
     else if (route.view === "profile") renderProfile(route.username);
     else if (route.view === "invites" && me) renderInvites();
     else if (route.view === "comments" && me) renderComments();
+    else if (route.view === "design" && me) renderDesigner();
     else renderDay(route.view === "day" ? route.day : todayKey());
     window.scrollTo({ top: 0 });
   }

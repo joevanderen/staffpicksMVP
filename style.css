@@ -233,3 +233,53 @@ label.field em { font-weight: normal; color: #555; font-style: normal; margin-le
 .comments .linklike.small { font-size: 11px; }
 .comment-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .comment-form input { flex: 1; min-width: 160px; font: inherit; font-size: 13px; padding: 4px 6px; }
+
+/* ---------- custom card looks ---------- */
+.card[data-styled] { background: var(--cbg); color: var(--cfg); border-color: rgba(0,0,0,.28); }
+.card[data-styled] .prompt, .card[data-styled] .meta, .card[data-styled] .caption,
+.card[data-styled] .whoreacted, .card[data-styled] .comments { color: var(--cfg); }
+.card[data-styled] a, .card[data-styled] .linklike { color: inherit; }
+.card[data-styled] .stamp { color: var(--cfg); border-color: var(--cfg); }
+.card[data-styled] .comments .comment { border-left-color: var(--cfg); }
+.card[data-styled] .comments .comment small { color: inherit; opacity: .75; }
+.card[data-styled] .graffiti span { mix-blend-mode: normal; opacity: .22; }
+.card[data-styled] .tape { background: rgba(255,255,255,.35); }
+.title[class*="ts-"] { color: var(--ctc); }
+.ts-0 { font-family: var(--marker); }
+.ts-1 { font-family: var(--type); font-size: 24px; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.ts-2 { font-family: "Bungee", Impact, sans-serif; font-size: 24px; text-shadow: 3px 3px 0 rgba(0,0,0,.35); }
+.title.ts-3 { font-family: "Bungee", Impact, sans-serif; font-size: 26px; color: transparent; -webkit-text-stroke: 2px var(--ctc); }
+.ts-4 { font-family: "Pacifico", "Brush Script MT", cursive; font-size: 28px; text-shadow: 2px 2px 0 rgba(0,0,0,.25); }
+.ts-5 { font-family: "Press Start 2P", "Courier New", monospace; font-size: 15px; line-height: 1.55; }
+.title.ts-6 { font-family: "Bungee", Impact, sans-serif; font-size: 26px; background: linear-gradient(90deg, var(--ctc), var(--cfg)); -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; }
+.ts-7 { font-family: "Bungee", Impact, sans-serif; font-size: 24px; display: inline-block; transform: skewX(-10deg); }
+.ts-8 { font-family: "Bungee", Impact, sans-serif; font-size: 22px; display: inline-block; border: 3px solid var(--ctc); padding: 2px 10px; transform: rotate(-2deg); }
+.ts-9 { font-family: var(--marker); text-shadow: 3px 3px 0 var(--cfg); }
+
+/* ---------- the designer ---------- */
+.design { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 760px) { .design { grid-template-columns: minmax(0, 1fr); } }
+.design h4 { margin: 14px 0 6px; font-family: var(--type); text-transform: uppercase; letter-spacing: .08em; font-size: 12px; }
+.design h4:first-child { margin-top: 0; }
+.ts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.ts-btn { font: inherit; text-align: center; cursor: pointer; padding: 8px 6px; min-height: 52px; border: 2px solid; border-color: #fff #404040 #404040 #fff; background: var(--cbg); color: var(--cfg); overflow: hidden; }
+.ts-btn[aria-pressed="true"] { border-color: #404040 #fff #fff #404040; outline: 2px solid var(--navy); outline-offset: 1px; }
+.ts-btn .title { margin: 0; font-size: 18px; }
+.ts-btn.ts-5x .title { font-size: 11px; }
+.ts-btn small { display: block; font-size: 10px; margin-top: 3px; color: inherit; opacity: .8; }
+.color-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.color-btn { display: flex; gap: 6px; align-items: center; font: inherit; font-size: 12px; cursor: pointer; background: var(--gray); padding: 3px 8px 3px 4px; border: 2px solid; border-color: #fff #404040 #404040 #fff; }
+.color-btn[aria-pressed="true"] { border-color: #404040 #fff #fff #404040; background: #e8e2c4; font-weight: bold; }
+.color-btn .chip { width: 20px; height: 20px; border: 1px solid #000; display: inline-block; }
+.color-dialog { margin-top: 8px; background: var(--gray); border: 2px solid; border-color: #fff #404040 #404040 #fff; padding: 8px; }
+.color-dialog .grid48 { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; margin: 4px 0 10px; }
+.color-dialog .sw { height: 22px; border: 1px solid #404040; padding: 0; cursor: pointer; }
+.color-dialog .sw:focus-visible, .color-dialog .sw[aria-pressed="true"] { outline: 2px solid var(--navy); outline-offset: 1px; }
+.color-dialog canvas { width: 100%; max-width: 280px; height: 120px; border: 2px solid; border-color: #404040 #fff #fff #404040; cursor: crosshair; display: block; touch-action: none; }
+.color-dialog .mix { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.color-dialog .mix input[type=text] { width: 90px; font-family: var(--type); }
+.color-dialog .newchip { width: 38px; height: 26px; border: 2px solid; border-color: #404040 #fff #fff #404040; }
+.contrast p { margin: 4px 0; font-size: 13px; }
+.contrast .good { color: #1f7a3d; font-weight: bold; }
+.contrast .bad { color: var(--red); font-weight: bold; }
+.design-preview { position: sticky; top: 8px; }
