@@ -102,9 +102,10 @@
       if (r.status === 204) return null;
       try { return await r.json(); } catch { return null; }
     }
+    const rpc_ = (fn, args) => req("/rpc/" + fn, { method: "POST", body: JSON.stringify(args || {}) });
     return {
       req,
-      rpc: (fn, args) => req("/rpc/" + fn, { method: "POST", body: JSON.stringify(args || {}) }),
+      rpc: rpc_,
       listProfiles: () => req("/profiles?select=id,username,display_name,role,blocked,invited_by,invite_code,created_at&limit=2000"),
       getProfile: (id) => req("/profiles?select=*&id=eq." + encodeURIComponent(id)).then((r) => (r && r[0]) || null),
       listInvites: (id) => req("/invites?select=*&created_by=eq." + encodeURIComponent(id) + "&order=created_at.desc"),
@@ -114,6 +115,13 @@
       addComment: (row) => req("/comments", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(row) }).then((r) => r && r[0]),
       deleteComment: (id) => req("/comments?id=eq." + encodeURIComponent(id), { method: "DELETE" }),
       setCommentHidden: (id, hidden) => req("/comments?id=eq." + encodeURIComponent(id), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ hidden }) }),
+      voteRound: () => rpc_("vote_round"),
+      listQuestions: () => req("/questions?select=*&order=created_at.desc&limit=2000"),
+      listQuestionAuthors: () => req("/question_authors?select=*&limit=5000"),
+      listMyVotes: () => req("/question_votes?select=question_id,value&limit=5000"),
+      submitQuestion: (text, category) => rpc_("submit_question", { p_text: text, p_category: category }),
+      rateQuestion: (id, value) => rpc_("rate_question", { p_question: id, p_value: value }),
+      reviewQuestion: (id, approve, text) => rpc_("review_question", { p_id: id, p_approve: approve, p_text: text || null }),
       listPrompts: () => req("/daily_prompts?select=*&order=day.desc&limit=2000"),
       async addPrompt(row) {
         try {
@@ -279,6 +287,10 @@
   let profilesById = {}, profilesByName = {};
   let commentsByPost = {};  // postId -> [comment, ...] oldest first
   const commentsOpen = new Set();
+  let questions = [];       // member-suggested questions this person may see
+  let qAuthor = {};         // question id -> author's profile id (only the author's own, plus questions already asked)
+  let myVotes = {};         // question id -> my rating (-1, 0, 1)
+  let round = {};           // { target: Sunday the open vote decides, today }
 
   function reindex() {
     postsByDay = {}; mine = {};
@@ -327,6 +339,17 @@
     saves = buildSaveMap(sv || []);
     reindex();
     syncSaves();
+    await loadQuestions();
+  }
+  // Member questions: closes finished votes, opens the next one, then reads what this member may see.
+  async function loadQuestions(skipRound) {
+    if (!(REMOTE && me)) { questions = []; qAuthor = {}; myVotes = {}; round = {}; return; }
+    if (!skipRound) { try { round = (await store.voteRound()) || {}; } catch { round = {}; } }
+    const [qs, qa, mv] = await Promise.all([
+      store.listQuestions().catch(() => []), store.listQuestionAuthors().catch(() => []), store.listMyVotes().catch(() => [])]);
+    questions = qs || [];
+    qAuthor = {}; for (const a of qa || []) qAuthor[a.question_id] = a.user_id;
+    myVotes = {}; for (const v of mv || []) myVotes[v.question_id] = v.value;
   }
   // Keeps "My list" and the online saves in step:
   // lists saved on this device before saves lived online are shared once,
@@ -355,8 +378,16 @@
   // ============================================================
   // choosing the day's prompt (equal chance per prompt; frozen once chosen)
   // ============================================================
+  const shortOf = (t) => (t.length > 28 ? t.slice(0, 27) + "…" : t);
+  // Member questions that earned a place in the rotation, with a boost so they get noticed.
+  function rotationQuestions() {
+    return questions.filter((q) => q.status === "rotation").map((q) => ({
+      id: "Q:" + q.id, question_id: q.id, prompt: q.text, title: shortOf(q.text), category: q.category,
+      weight: 1, w: 10 * (cfg.QUESTION_BOOST || 3)
+    }));
+  }
   function pickPrompt(day, used) {
-    const eligible = DATA.real.filter((p) => p.weight <= 10);
+    const eligible = DATA.real.filter((p) => p.weight <= 10).concat(rotationQuestions());
     let pool = eligible.filter((p) => !used.has(p.id));
     if (!pool.length) pool = eligible.filter((p) => p.repeatable);
     if (!pool.length) pool = eligible;
@@ -366,7 +397,7 @@
       if (varied.length) pool = varied;
     }
     const r = rng(hash("pick:" + day));
-    const weights = pool.map((p) => 11 - p.weight);
+    const weights = pool.map((p) => p.w || 11 - p.weight);
     let t = r() * weights.reduce((a, b) => a + b, 0);
     for (let i = 0; i < pool.length; i++) { t -= weights[i]; if (t < 0) return pool[i]; }
     return pool[pool.length - 1];
@@ -378,9 +409,11 @@
     const used = new Set(Object.values(promptsByDay).map((r) => r.prompt_key));
     const p = pickPrompt(day, used);
     const row = { day, prompt_key: p.id, prompt: p.prompt, short_title: p.title, category: p.category };
+    if (p.question_id) row.question_id = p.question_id;
     let saved = null;
     try { saved = await store.addPrompt(row); } catch { /* fall back to our own pick */ }
     promptsByDay[day] = saved || row;
+    if (promptsByDay[day].question_id) { try { await loadQuestions(true); } catch { /* the credit line just won't show yet */ } }
     if (!REMOTE) { posts = await store.listPosts(); reindex(); }
     return promptsByDay[day];
   }
@@ -662,6 +695,13 @@
   const main = () => $("#main");
   let animToken = 0;
 
+  // "Submitted by ..." under a question that came from a member (shown the day it is asked, not before).
+  function creditLine(row) {
+    const aid = row && row.question_id && qAuthor[row.question_id];
+    const prof = aid && profilesById[aid];
+    if (!prof) return null;
+    return el("p", { class: "credit" }, "Submitted by ", el("a", { href: "#u=" + prof.username, text: prof.display_name }));
+  }
   function panel(titleText, ...kids) {
     return el("section", { class: "win" },
       el("div", { class: "titlebar" }, el("span", { text: titleText })),
@@ -685,6 +725,8 @@
     function showForm() {
       formWrap.textContent = "";
       const f = buildAnswerForm(today);
+      const credit = creditLine(row);
+      if (credit) formWrap.append(credit);
       formWrap.append(
         el("p", { class: "note", text: "Everyone answers the same question. Answer today's to unlock the feed, the archive and your inbox." }), f);
       return f;
@@ -767,7 +809,7 @@
 
     const head = el("div", { class: "win-body" },
       el("p", { class: "cat-tag", text: row.category }),
-      el("p", { class: "sentence big", text: row.prompt }));
+      el("p", { class: "sentence big", text: row.prompt }), creditLine(row));
     m.append(el("section", { class: "win" },
       el("div", { class: "titlebar" }, el("span", { text: fmtDay(day, { weekday: "long", month: "long", day: "numeric" }) + (day === today ? "  ·  Today" : "") })),
       head));
@@ -1110,6 +1152,123 @@
     renderSidebar();
   }
 
+  // ----- questions: the weekly vote, suggestions, and the approval queue -----
+  const QLABELS = [[1, "Well, let me tell you!"], [0, "I am indifferent to this question"], [-1, "I don't even want to answer this with my psychologist"]];
+  const QSTATUS = { pending: "Waiting for approval", rejected: "Not approved", pool: "In the pool", candidate: "Up for this week's vote",
+    scheduled: "Chosen for Sunday", rotation: "In the rotation", used: "Asked", retired: "Retired" };
+  let qNote = "";
+  const cleanErr = (ex) => { const s = String(ex && ex.message || ""); try { return JSON.parse(s).message || s; } catch { return s.slice(0, 160); } };
+  const openCandidates = () => questions.filter((q) => q.status === "candidate" && q.round_day && q.round_day > todayKey());
+  const isMine = (q) => !!(me && qAuthor[q.id] === me.id);
+  const unratedCount = () => openCandidates().filter((q) => !isMine(q) && myVotes[q.id] === undefined).length;
+  const pendingCount = () => (isAdmin() ? questions.filter((q) => q.status === "pending").length : 0);
+  const questionsBadge = () => (me ? unratedCount() + pendingCount() : 0);
+
+  function voteCard(q) {
+    const box = el("div", { class: "qcard" }, el("p", { class: "cat-tag", text: q.category }), el("p", { class: "qtext", text: q.text }));
+    if (isMine(q)) { box.append(el("p", { class: "hint", text: "You wrote this one, so you can't rate it." })); return box; }
+    const msg = el("span", { class: "hint" });
+    const btns = QLABELS.map(([v, label]) => el("button", { class: "rbtn", type: "button", "aria-pressed": String(myVotes[q.id] === v), text: label,
+      onclick: async () => {
+        if (myVotes[q.id] === v) return;
+        btns.forEach((b) => (b.disabled = true));
+        try { await store.rateQuestion(q.id, v); myVotes[q.id] = v; msg.textContent = "Saved. You can change it until voting closes."; }
+        catch (ex) { msg.textContent = cleanErr(ex); }
+        btns.forEach((b, i) => { b.disabled = false; b.setAttribute("aria-pressed", String(myVotes[q.id] === QLABELS[i][0])); });
+        renderSidebar();
+      } }));
+    box.append(el("div", { class: "reactions qvote" }, ...btns), msg);
+    return box;
+  }
+
+  function suggestForm() {
+    const cats = [...new Set(DATA.real.map((p) => p.category))].sort();
+    const text = el("textarea", { rows: "2", maxlength: "140", placeholder: "A question everyone could answer in a line or two" });
+    const counter = el("em");
+    const sel = el("select", {}, el("option", { value: "", text: "Pick a category" }), ...cats.map((c) => el("option", { value: c, text: c })));
+    const err = el("p", { class: "err", role: "alert" }), ok = el("p", { class: "hint", role: "status" });
+    const btn = el("button", { class: "btn", type: "submit", text: "Suggest it" });
+    const weekAgo = Date.now() - 7 * 86400e3;
+    const usedN = questions.filter((q) => isMine(q) && Date.parse(q.created_at) > weekAgo).length;
+    const quota = isAdmin() ? "No limit for you as admin." : Math.max(0, 3 - usedN) + " of 3 left this week.";
+    const upd = () => { counter.textContent = (140 - text.value.length) + " characters left"; };
+    text.addEventListener("input", upd); upd();
+    const form = el("form", { class: "answer-form" },
+      el("label", { class: "field" }, el("span", {}, "Your question ", counter), text),
+      el("label", { class: "field" }, el("span", { text: "Category" }), sel),
+      el("div", { class: "row" }, btn, el("span", { class: "hint", text: quota })), err, ok);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault(); err.textContent = ""; ok.textContent = "";
+      const t = text.value.trim();
+      if (t.length < 15) { err.textContent = "Give it a little more: at least 15 characters."; return; }
+      if (!sel.value) { err.textContent = "Pick a category."; return; }
+      if (DATA.real.some((p) => p.prompt.toLowerCase() === t.toLowerCase())) { err.textContent = "That one is already on the list."; return; }
+      btn.disabled = true;
+      try {
+        const q = await store.submitQuestion(t, sel.value);
+        if (q) { questions = [q, ...questions]; qAuthor[q.id] = me.id; }
+        qNote = q && q.status === "pending"
+          ? "Thanks! It's waiting for approval. Nobody will know it was yours unless it gets asked."
+          : "Thanks! It's in the pool. Nobody will know it was yours unless it gets asked.";
+        renderQuestions(); renderSidebar();
+      } catch (ex) { err.textContent = cleanErr(ex); btn.disabled = false; }
+    });
+    return form;
+  }
+
+  function reviewRow(q) {
+    const input = el("input", { value: q.text, maxlength: "140" });
+    const msg = el("span", { class: "hint" });
+    const act = (approve) => async () => {
+      msg.textContent = "";
+      try {
+        const t = input.value.trim();
+        await store.reviewQuestion(q.id, approve, t !== q.text ? t : null);
+        q.status = approve ? "pool" : "rejected"; if (t !== q.text) q.text = t;
+        renderQuestions(); renderSidebar();
+      } catch (ex) { msg.textContent = cleanErr(ex); }
+    };
+    return el("div", { class: "qcard" }, el("p", { class: "cat-tag", text: q.category }), input,
+      el("div", { class: "row" }, el("button", { class: "btn small", type: "button", text: "Approve", onclick: act(true) }),
+        el("button", { class: "btn small", type: "button", text: "Reject", onclick: act(false) }), msg));
+  }
+
+  // Pull fresh votes and suggestions when the page is opened, without wiping a half-typed suggestion.
+  async function refreshQuestions() {
+    const before = JSON.stringify([questions, myVotes]);
+    try { await loadQuestions(true); } catch { return; }
+    const box = $("#main textarea");
+    if (currentRoute().view === "questions" && JSON.stringify([questions, myVotes]) !== before && !(box && box.value)) { renderQuestions(); renderSidebar(); }
+  }
+
+  function renderQuestions() {
+    const m = main(); m.textContent = "";
+    const cands = openCandidates();
+    const voteBody = [];
+    if (!cands.length) {
+      voteBody.push(el("p", { class: "empty", text: "No vote is open right now." }),
+        el("p", { class: "hint", text: "A vote opens Monday to Friday once two or more suggested questions are in the pool. The winner becomes Sunday's question." }));
+    } else {
+      const closes = new Date(dayStartMs(cands[0].round_day)).toLocaleString(undefined, { weekday: "long", hour: "numeric", minute: "2-digit" });
+      voteBody.push(el("p", { class: "hint", text: "Rate each one. Ratings are anonymous, and nobody sees totals or who wrote what until voting closes (" + closes + " your time). The top score becomes Sunday's question." }));
+      for (const q of cands) voteBody.push(voteCard(q));
+    }
+    m.append(panel("This week's vote", ...voteBody));
+    m.append(panel("Suggest a question", qNote ? el("p", { class: "note", role: "status", text: qNote }) : null, suggestForm()));
+    qNote = "";
+    const mineList = questions.filter(isMine).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    if (mineList.length) {
+      m.append(panel("Your suggestions", ...mineList.map((q) => el("div", { class: "qmine" },
+        el("span", { class: "qtext", text: q.text }), el("small", { text: QSTATUS[q.status] || q.status })))));
+    }
+    if (isAdmin()) {
+      const waiting = questions.filter((q) => q.status === "pending");
+      m.append(panel("Waiting for approval (" + waiting.length + ")",
+        el("p", { class: "hint", text: "You see the wording only, not who wrote it. You can fix the wording before approving." }),
+        ...(waiting.length ? waiting.map(reviewRow) : [el("p", { class: "empty", text: "Nothing waiting." })])));
+    }
+  }
+
   // ----- a member's profile -----
   function renderProfile(username) {
     const m = main(); m.textContent = "";
@@ -1120,6 +1279,12 @@
     const info = el("p", { class: "hint" }, "@" + prof.username + " · joined " + joined);
     if (inviter) info.append(" · invited by ", el("a", { href: "#u=" + inviter.username, text: inviter.display_name }));
     const body = [el("p", { class: "sentence big", text: prof.display_name }), info];
+    const askedDays = Object.values(promptsByDay).filter((r) => r.question_id && qAuthor[r.question_id] === prof.id).map((r) => r.day).sort().reverse();
+    if (askedDays.length) {
+      const ln = el("p", { class: "hint" }, "Questions asked: " + askedDays.length + " · ");
+      askedDays.forEach((d, i) => { if (i) ln.append(", "); ln.append(el("a", { href: "#day=" + d, text: fmtDay(d, { month: "short", day: "numeric" }) })); });
+      body.push(ln);
+    }
     if (me && prof.id === me.id) body.push(el("p", {}, el("a", { href: "#invites", text: "Invite a friend" })));
     if (isAdmin() && prof.id !== me.id) {
       const msg = el("span", { class: "hint" });
@@ -1244,6 +1409,7 @@
     if (h === "list") return { view: "list" };
     if (h === "invites") return { view: "invites" };
     if (h === "comments") return { view: "comments" };
+    if (h === "questions") return { view: "questions" };
     if (h === "design") return { view: "design" };
     if (h.startsWith("u=")) return { view: "profile", username: decodeURIComponent(h.slice(2)).toLowerCase() };
     return { view: "day", day: todayKey() };
@@ -1275,6 +1441,7 @@
     if (me) {
       side.append(
         item("comments", "Comments", { active: route.view === "comments", unread: unseenCount() > 0, badge: unseenCount() || 0 }),
+        item("questions", "Questions", { active: route.view === "questions", unread: questionsBadge() > 0, badge: questionsBadge() || 0 }),
         item("design", "Design my card", { active: route.view === "design" }),
         item("u=" + me.username, "My profile", { active: route.view === "profile" && route.username === me.username }),
         item("invites", "Invite a friend", { active: route.view === "invites" }));
@@ -1360,6 +1527,7 @@
     else if (route.view === "profile") renderProfile(route.username);
     else if (route.view === "invites" && me) renderInvites();
     else if (route.view === "comments" && me) renderComments();
+    else if (route.view === "questions" && me) { renderQuestions(); refreshQuestions(); }
     else if (route.view === "design" && me) renderDesigner();
     else renderDay(route.view === "day" ? route.day : todayKey());
     window.scrollTo({ top: 0 });

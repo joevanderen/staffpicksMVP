@@ -10,6 +10,7 @@ window.APP_CONFIG = {
   SUPABASE_ANON_KEY: "sb_publishable_FaXvjl6-mz43tQkMv4cFKA_G6SHK2u3",
 
   CAPTION_MAX: 300,
+  QUESTION_BOOST: 3,   // member questions in the rotation are this many times as likely to be picked as a normal prompt
 
   // false = people can still use the site with just a name (during the switch to accounts).
   // true  = everyone must log in. Flip this after your friends have joined and been linked.

@@ -69,3 +69,17 @@ Comments are for logged-in members only, 200 characters, shown under each post.
 1. In Supabase's SQL Editor, run `supabase-update-4.sql`.
 2. Upload all the files to GitHub over the old ones. There is a new file, `cardstyle.js`.
 Members open "Design my card" in the sidebar. Their look applies to their new answers.
+
+## Member questions, weekly vote and credit (update 5)
+1. In Supabase's SQL Editor, run `supabase-update-5.sql`. (It's safe to run once; it only adds things.)
+2. Upload all the files to GitHub over the old ones. Nothing new to add; `app.js`, `style.css` and `config.js` changed.
+3. Members get a **Questions** item in the sidebar: this week's vote, a "Suggest a question" form and a list of their own suggestions. As admin you also see **Waiting for approval**.
+
+How it works:
+- Members suggest up to 3 questions in any 7 days (admins have no limit and skip approval). You approve each one and can fix the wording; to skip approval, set `question_approval` to `off` in the `app_settings` table.
+- Approved questions wait in a pool nobody can see. Monday to Friday, once the pool holds 2 or more, 3 are drawn at random (fewer if the pool is small) and a vote opens for the coming Sunday.
+- Everyone rates each candidate: +1 "Well, let me tell you!", 0 "I am indifferent to this question", -1 "I don't even want to answer this with my psychologist". You can't rate your own. Ratings are anonymous and totals stay hidden until voting closes at **Sunday 6:00 AM Buenos Aires**.
+- At the close: the top score becomes Sunday's question (ties broken randomly). Others with a score above 0 join the daily rotation (3 times as likely as a normal prompt, change `QUESTION_BOOST` in `config.js`). A score of 0 goes back to the pool for one more draw, then retires. Below 0 with 3 or more raters retires it. Retired questions are never credited to anyone.
+- No scheduled job is needed: the first visit after each moment does the draw or the close.
+- Credit: a question that gets asked shows "Submitted by Name" (linked to their profile) on its day, and the profile shows "Questions asked". Who wrote a question stays hidden until then. The site can't show it to anyone, including you; only the Supabase dashboard (the `question_authors` table) can.
+- Before you run the SQL, the site still works; the Questions page just stays empty.
