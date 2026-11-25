@@ -14,7 +14,7 @@ window.APP_CONFIG = {
 
   // false = people can still use the site with just a name (during the switch to accounts).
   // true  = everyone must log in. Flip this after your friends have joined and been linked.
-  REQUIRE_LOGIN: false,
+  REQUIRE_LOGIN: true,
 
   // How people log in from the email we send:
   //   "link" = click the link in the email (works with Supabase's built-in email, no setup)

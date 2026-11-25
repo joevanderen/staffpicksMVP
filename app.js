@@ -1874,6 +1874,9 @@
     } else if (state.pendingInvite) {
       banner.hidden = false;
       banner.textContent = "That invite link isn't valid, or it was already used. If you already have an account, log in below.";
+    } else if (cfg.REQUIRE_LOGIN) {
+      banner.hidden = false;
+      banner.textContent = "Members only. Log in with your email. Been playing with just a name, or never had an account? Ask whoever runs this for an invite link, and your old answers will be attached to your new account.";
     } else {
       banner.hidden = true;
     }
