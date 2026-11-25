@@ -83,3 +83,10 @@ How it works:
 - No scheduled job is needed: the first visit after each moment does the draw or the close.
 - Credit: a question that gets asked shows "Submitted by Name" (linked to their profile) on its day, and the profile shows "Questions asked". Who wrote a question stays hidden until then. The site can't show it to anyone, including you; only the Supabase dashboard (the `question_authors` table) can.
 - Before you run the SQL, the site still works; the Questions page just stays empty.
+
+## Profile photos and reaction faces (update 6)
+1. In Supabase's SQL Editor, run `supabase-update-6.sql`. It makes a **private** photo bucket called `faces`, so only logged-in members can see photos.
+2. Upload all the files to GitHub over the old ones. Until the SQL is run the site works as before and the photo pages stay out of the way.
+3. Members get **My photos** in the sidebar: a main photo, plus three optional faces (surprised, happy, angry). Photos are squared and shrunk to 256 pixels in the browser before upload, which also removes any hidden location data. On a phone, "Take a photo" opens the front camera.
+4. The main photo shows next to names on cards and comments and on profiles. When someone reacts to a post, their matching face appears on the card: surprised for "Woah, I've never heard of that!", happy for "Preach", angry for "No! God! No! God! Please! NO!". If they skipped a face, their main photo appears with a colored ring. If they have no photo, a colored circle with their initial.
+5. Members can remove any or all of their photos. As admin you can remove someone's photos from their profile page. A blocked member's photos stop showing.

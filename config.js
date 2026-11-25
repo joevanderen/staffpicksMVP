@@ -47,9 +47,9 @@ window.APP_CONFIG = {
 
   // The reaction buttons. "graffiti" is the marker scrawl that appears once someone reacts.
   REACTIONS: [
-    { kind: "never_heard", label: "Woah, I've never heard of that!", graffiti: "WOAH!" },
-    { kind: "same",        label: "Preach",                          graffiti: "PREACH" },
-    { kind: "disagree",    label: "No! God! No! God! Please! NO!",   graffiti: "NO! GOD! NO!" }
+    { kind: "never_heard", label: "Woah, I've never heard of that!", graffiti: "WOAH!", face: "surprised" },
+    { kind: "same",        label: "Preach",                          graffiti: "PREACH", face: "happy" },
+    { kind: "disagree",    label: "No! God! No! God! Please! NO!",   graffiti: "NO! GOD! NO!", face: "angry" }
   ],
   // Older reaction kinds (want_to_try, loved_it) are still stored but no longer shown.
 };

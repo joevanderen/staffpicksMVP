@@ -46,7 +46,7 @@
   // ============================================================
   const KEY = "staffpicks.v2";
   function freshState() {
-    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, savesSynced: false, accountId: "", pendingInvite: "", commentsSeen: 0, demoOffset: 0 };
+    return { name: "", deviceId: "", joinedDay: "", lateSeen: 0, revealed: {}, dismissed: {}, saved: {}, savesSynced: false, accountId: "", pendingInvite: "", commentsSeen: 0, photoNudgeDismissed: false, demoOffset: 0 };
   }
   function loadState() {
     try { return Object.assign(freshState(), JSON.parse(localStorage.getItem(KEY) || "{}")); }
@@ -103,10 +103,36 @@
       try { return await r.json(); } catch { return null; }
     }
     const rpc_ = (fn, args) => req("/rpc/" + fn, { method: "POST", body: JSON.stringify(args || {}) });
+    // Storage (profile photos live in a private bucket and are shown through short-lived signed links)
+    const sbase = cfg.SUPABASE_URL.replace(/\/$/, "") + "/storage/v1";
+    async function sreq(path, opts = {}) {
+      const h = { ...headers };
+      const tok = await Auth.token();
+      if (tok) h.Authorization = "Bearer " + tok;
+      const r = await fetch(sbase + path, { ...opts, headers: { ...h, ...(opts.headers || {}) } });
+      if (!r.ok) throw new Error((await r.text()) || r.statusText);
+      try { return await r.json(); } catch { return null; }
+    }
+    const PROFILE_COLS = "id,username,display_name,role,blocked,invited_by,invite_code,created_at";
     return {
       req,
       rpc: rpc_,
-      listProfiles: () => req("/profiles?select=id,username,display_name,role,blocked,invited_by,invite_code,created_at&limit=2000"),
+      // asks for the photos column too; falls back quietly if update 6 hasn't been run yet
+      listProfiles: async () => {
+        try { return await req("/profiles?select=" + PROFILE_COLS + ",photos&limit=2000"); }
+        catch { return req("/profiles?select=" + PROFILE_COLS + "&limit=2000"); }
+      },
+      async signPhotos(paths) {
+        const out = {};
+        const r = await sreq("/object/sign/faces", { method: "POST", body: JSON.stringify({ expiresIn: 21600, paths }) });
+        for (const x of r || []) if (x.signedURL && !x.error) out[x.path] = sbase + x.signedURL;
+        return out;
+      },
+      uploadPhoto: (path, blob) => sreq("/object/faces/" + path, { method: "POST", headers: { "Content-Type": "image/jpeg", "x-upsert": "false" }, body: blob }),
+      deletePhotos: (paths) => sreq("/object/faces", { method: "DELETE", body: JSON.stringify({ prefixes: paths }) }),
+      setPhoto: (kind, version) => rpc_("set_my_photo", { p_kind: kind, p_version: version }),
+      clearPhotos: () => rpc_("clear_my_photos"),
+      adminClearPhotos: (id) => rpc_("admin_clear_photos", { p_user: id }),
       getProfile: (id) => req("/profiles?select=*&id=eq." + encodeURIComponent(id)).then((r) => (r && r[0]) || null),
       listInvites: (id) => req("/invites?select=*&created_by=eq." + encodeURIComponent(id) + "&order=created_at.desc"),
       setHidden: (postId, hidden) => req("/posts?id=eq." + encodeURIComponent(postId), { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ hidden }) }),
@@ -137,7 +163,7 @@
         const rows = await req("/posts", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(p) });
         return rows && rows[0];
       },
-      listReactions: () => req("/reactions?select=post_id,device_id,kind,name&limit=10000"),
+      listReactions: () => req("/reactions?select=post_id,device_id,kind,name,user_id&limit=10000"),
       addReaction: (postId, kind) =>
         req("/reactions", { method: "POST", body: JSON.stringify({ post_id: postId, device_id: actorId(), kind, name: myName(), user_id: me ? me.id : undefined }) }),
       listSaves: () => req("/saves?select=post_id,device_id,name&limit=10000"),
@@ -304,9 +330,10 @@
     const map = {};
     for (const r of list) {
       const slot = (map[r.post_id] = map[r.post_id] || {});
-      const k = (slot[r.kind] = slot[r.kind] || { n: 0, mine: false, names: [] });
+      const k = (slot[r.kind] = slot[r.kind] || { n: 0, mine: false, names: [], users: [] });
       k.n += 1;
       k.names.push(r.name || "a friend");
+      k.users.push(r.user_id || null);
       if (r.device_id === actorId()) k.mine = true;
     }
     return map;
@@ -340,6 +367,7 @@
     reindex();
     syncSaves();
     await loadQuestions();
+    await loadPhotos();
   }
   // Member questions: closes finished votes, opens the next one, then reads what this member may see.
   async function loadQuestions(skipRound) {
@@ -544,15 +572,15 @@
 
   async function toggleReaction(post, kind, repaint) {
     const slot = (reactions[post.id] = reactions[post.id] || {});
-    const cur = (slot[kind] = slot[kind] || { n: 0, mine: false, names: [] });
-    cur.names = cur.names || [];
+    const cur = (slot[kind] = slot[kind] || { n: 0, mine: false, names: [], users: [] });
+    cur.names = cur.names || []; cur.users = cur.users || [];
     const meName = myName() || "a friend";
     const adding = !cur.mine;
     const flip = (add) => {
       cur.mine = add;
       cur.n = Math.max(0, cur.n + (add ? 1 : -1));
-      if (add) cur.names.push(meName);
-      else { const i = cur.names.indexOf(meName); if (i >= 0) cur.names.splice(i, 1); }
+      if (add) { cur.names.push(meName); cur.users.push(me ? me.id : null); }
+      else { const i = cur.names.indexOf(meName); if (i >= 0) { cur.names.splice(i, 1); cur.users.splice(i, 1); } }
     };
     flip(adding);
     repaint();
@@ -576,15 +604,18 @@
     const lb = linkBlock(post.link);
     if (lb) c.append(lb);
     const prof = post.user_id && profilesById[post.user_id];
-    const meta = el("p", { class: "meta" }, "— ");
+    const meta = el("p", { class: "meta" });
+    if (prof) meta.append(avatar(prof, 22), " ");
+    meta.append("— ");
     meta.append(prof ? el("a", { href: "#u=" + prof.username, text: post.author_name }) : post.author_name, ", " + when);
     c.append(meta);
     if (opts.preview) return c;
 
     const bar = el("div", { class: "reactions" });
+    const faces = el("div", { class: "faces" });
     const who = el("div", { class: "whoreacted" });
     let graf = el("div");
-    c.append(bar, who, graf);
+    c.append(bar, faces, who, graf);
     if (me) c.append(commentsBlock(post, !!opts.openComments));
 
     function paint() {
@@ -604,6 +635,20 @@
         if (info.n > 0) b.append(el("span", { class: "n", text: String(info.n) }));
         bar.append(b);
       }
+      faces.textContent = "";
+      let shown = 0, extra = 0;
+      for (const r of cfg.REACTIONS) {
+        const info = slot[r.kind];
+        if (!info || !info.users) continue;
+        info.users.forEach((uid, i) => {
+          if (!uid) return;
+          if (shown >= 8) { extra++; return; }
+          const f = faceSticker(uid, r.face, r.label, (info.names || [])[i] || "a friend");
+          if (f) { faces.append(f); shown++; }
+        });
+      }
+      if (extra) faces.append(el("span", { class: "faces-more", text: "+" + extra }));
+      faces.hidden = !faces.childNodes.length;
       who.textContent = "";
       for (const r of cfg.REACTIONS) {
         const info = slot[r.kind];
@@ -694,6 +739,88 @@
   // ============================================================
   const main = () => $("#main");
   let animToken = 0;
+
+  // ============================================================
+  // photos: a profile photo, plus three faces that show up when you react
+  // ============================================================
+  const FACES = [
+    { kind: "main", title: "Your photo", sub: "So friends know who you are." },
+    { kind: "surprised", title: "Surprised", sub: "Shown when you tap \u201cWoah, I've never heard of that!\u201d" },
+    { kind: "happy", title: "Happy", sub: "Shown when you tap \u201cPreach\u201d." },
+    { kind: "angry", title: "Angry", sub: "Shown when you tap \u201cNo! God! No! God! Please! NO!\u201d" }
+  ];
+  const FACE_RING = { surprised: "#e0a100", happy: "#2e9e4f", angry: "#d6281f" };
+  const AV_COLORS = ["#c0392b", "#d35400", "#b7950b", "#1e8449", "#117a8b", "#2e4a9e", "#7d3c98", "#a04668"];
+  let photoUrl = {};   // storage path -> short-lived link
+  const photoPath = (prof, kind) => (prof && prof.photos && prof.photos[kind] ? prof.id + "/" + kind + "-" + prof.photos[kind] + ".jpg" : null);
+  const photoSrc = (prof, kind) => { if (!prof || prof.blocked) return null; const pth = photoPath(prof, kind); return (pth && photoUrl[pth]) || null; };
+  async function signPaths(paths) {
+    const need = [...new Set(paths.filter((x) => x && !photoUrl[x]))];
+    for (let i = 0; i < need.length; i += 100) {
+      try { Object.assign(photoUrl, await store.signPhotos(need.slice(i, i + 100))); } catch { /* avatars just fall back to initials */ }
+    }
+  }
+  async function loadPhotos() {
+    if (!(REMOTE && me)) return;
+    const paths = [];
+    for (const prof of Object.values(profilesById)) for (const k of Object.keys(prof.photos || {})) paths.push(photoPath(prof, k));
+    if (me && me.photos) for (const k of Object.keys(me.photos)) paths.push(photoPath(me, k));
+    await signPaths(paths);
+  }
+  // A round picture: the photo if there is one, otherwise a colored circle with the first letter.
+  // For a face kind (surprised/happy/angry) it falls back to the main photo.
+  function avatar(prof, size, kind, extra) {
+    const a = el("span", { class: "avatar" + (extra ? " " + extra : "") });
+    a.style.width = a.style.height = size + "px";
+    const initial = () => {
+      a.textContent = ""; a.classList.add("noimg");
+      a.style.background = AV_COLORS[hash(prof ? prof.id : "x") % AV_COLORS.length];
+      a.style.fontSize = Math.round(size * 0.5) + "px";
+      a.textContent = prof ? ((prof.display_name || prof.username || "?").trim().charAt(0).toUpperCase() || "?") : "?";
+    };
+    const src = prof && (photoSrc(prof, kind || "main") || (kind && kind !== "main" ? photoSrc(prof, "main") : null));
+    if (src) {
+      const img = el("img", { src, alt: "", draggable: "false" });
+      img.addEventListener("error", initial);
+      a.append(img);
+    } else initial();
+    return a;
+  }
+  // A face on a post: the reactor's expression photo (or their main photo) in a colored ring, a little crooked.
+  function faceSticker(userId, face, label, name) {
+    const prof = profilesById[userId];
+    if (!prof || prof.blocked) return null;
+    const r = rng(hash(userId + face));
+    const sticker = el("span", { class: "face", title: name + ": " + label }, avatar(prof, 38, face));
+    sticker.style.borderColor = FACE_RING[face] || "#555";
+    sticker.style.setProperty("--rot", ((r() - 0.5) * 16).toFixed(1) + "deg");
+    return sticker;
+  }
+  // Squares the picture, shrinks it to a small JPEG and (because it is redrawn) drops any hidden location data.
+  async function shrinkToJpeg(file, size = 256) {
+    let bmp;
+    try { bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+    catch {
+      bmp = await new Promise((res, rej) => {
+        const img = new Image(); const u = URL.createObjectURL(file);
+        img.onload = () => res(img); img.onerror = () => rej(new Error("That doesn't look like a picture.")); img.src = u;
+      });
+    }
+    const w = bmp.width || bmp.naturalWidth, h = bmp.height || bmp.naturalHeight;
+    if (!w || !h) throw new Error("That doesn't look like a picture.");
+    const side = Math.min(w, h);
+    const sx = (w - side) / 2, sy = (h - side) * 0.3;   // for tall photos, keep a little more of the top (faces)
+    const cv = document.createElement("canvas"); cv.width = cv.height = size;
+    const g = cv.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, size, size);
+    g.drawImage(bmp, sx, sy, side, side, 0, 0, size, size);
+    return new Promise((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error("Couldn't read that picture."))), "image/jpeg", 0.82));
+  }
+  function photoNudge() {
+    if (!(me && me.photos && !me.photos.main && !state.photoNudgeDismissed)) return null;
+    return el("div", { class: "note" }, "Add a photo so friends know who you are. ",
+      el("a", { href: "#photos", text: "Add one" }), " ",
+      el("button", { class: "linklike", type: "button", text: "Not now", onclick: () => { state.photoNudgeDismissed = true; saveState(); render(); } }));
+  }
 
   // "Submitted by ..." under a question that came from a member (shown the day it is asked, not before).
   function creditLine(row) {
@@ -806,6 +933,7 @@
     if (!row) { m.append(panel("Not found", el("p", { class: "empty", text: "There's no question for that day." }))); return; }
     const today = todayKey();
     const answered = !!mine[day];
+    if (answered) { const nudge = photoNudge(); if (nudge) m.append(nudge); }
 
     const head = el("div", { class: "win-body" },
       el("p", { class: "cat-tag", text: row.category }),
@@ -1091,6 +1219,7 @@
         const prof = profilesById[c.user_id];
         const when = new Date(c.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
         const p = el("p", { class: "comment" + (c.hidden ? " is-hidden" : "") },
+          prof ? avatar(prof, 20) : null, prof ? " " : null,
           prof ? el("a", { href: "#u=" + prof.username, text: c.author_name }) : el("b", { text: c.author_name }),
           " " + c.body + " ", el("small", { text: when + (c.hidden ? " · hidden from others" : "") }));
         if (c.user_id === me.id) {
@@ -1269,6 +1398,78 @@
     }
   }
 
+  // ----- my photos -----
+  function renderPhotos() {
+    const m = main(); m.textContent = "";
+    const msg = el("p", { class: "hint", role: "status" });
+    const slots = {};
+    const touch = !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
+
+    async function save(kind, file) {
+      msg.textContent = "Saving...";
+      try {
+        const blob = await shrinkToJpeg(file);
+        const ver = Date.now();
+        const pth = me.id + "/" + kind + "-" + ver + ".jpg";
+        await store.uploadPhoto(pth, blob);
+        try { await store.setPhoto(kind, ver); } catch (ex) { store.deletePhotos([pth]).catch(() => {}); throw ex; }
+        const old = photoPath(me, kind);
+        me.photos = { ...(me.photos || {}), [kind]: ver };
+        if (profilesById[me.id]) profilesById[me.id].photos = me.photos;
+        photoUrl[pth] = URL.createObjectURL(blob);
+        if (old) store.deletePhotos([old]).catch(() => {});
+        msg.textContent = "Saved."; paintSlot(kind); renderSidebar();
+      } catch (ex) { msg.textContent = "Couldn't save that photo. " + cleanErr(ex); }
+    }
+    async function remove(kind) {
+      try {
+        const old = photoPath(me, kind);
+        await store.setPhoto(kind, null);
+        const next = { ...(me.photos || {}) }; delete next[kind];
+        me.photos = next; if (profilesById[me.id]) profilesById[me.id].photos = next;
+        if (old) store.deletePhotos([old]).catch(() => {});
+        msg.textContent = "Removed."; paintSlot(kind); renderSidebar();
+      } catch (ex) { msg.textContent = "Couldn't remove that. " + cleanErr(ex); }
+    }
+    function paintSlot(kind) {
+      const box = slots[kind]; box.textContent = "";
+      const has = !!(me.photos && me.photos[kind]);
+      const size = kind === "main" ? 140 : 96;
+      const pic = has ? avatar(me, size, kind === "main" ? "main" : kind) : el("span", { class: "avatar empty", text: "+" });
+      pic.style.width = pic.style.height = size + "px";
+      if (!has) pic.style.fontSize = Math.round(size * 0.4) + "px";
+      const picker = (label, capture) => {
+        const inp = el("input", { type: "file", accept: "image/*", hidden: "hidden" });
+        if (capture) inp.setAttribute("capture", "user");
+        inp.addEventListener("change", () => { const f = inp.files && inp.files[0]; inp.value = ""; if (f) save(kind, f); });
+        return [el("button", { class: "btn small", type: "button", text: label, onclick: () => inp.click() }), inp];
+      };
+      const btns = el("div", { class: "row" }, ...(touch ? [...picker(has ? "Retake" : "Take a photo", true), ...picker("Choose a file", false)] : picker(has ? "Change" : "Choose a photo", false)));
+      if (has) btns.append(el("button", { class: "linklike", type: "button", text: "Remove", onclick: () => remove(kind) }));
+      box.append(pic);
+      const info = FACES.find((f) => f.kind === kind);
+      box.append(el("div", { class: "slot-info" }, el("b", { text: info.title }), el("small", { text: info.sub }), btns));
+    }
+    const slot = (kind) => { const d = el("div", { class: "slot" }); slots[kind] = d; paintSlot(kind); return d; };
+
+    m.append(panel("Your photo",
+      el("p", { class: "note", text: "Give us a photo of yourself, not naked please." }),
+      slot("main"), msg));
+    m.append(panel("Your faces",
+      el("p", { class: "hint", text: "Make a face. When you react to someone's answer, your face shows up on their card. Skip any you like; we'll use your photo with a colored ring instead." }),
+      slot("surprised"), slot("happy"), slot("angry")));
+    m.append(panel("Privacy",
+      el("p", { class: "hint", text: "Only logged-in members can see your photos. Each one is shrunk to a small square and any hidden location data is removed. You can delete them any time, and so can the admin." }),
+      el("div", { class: "row" }, el("button", { class: "btn small", type: "button", text: "Remove all my photos", onclick: async () => {
+        try {
+          const paths = Object.keys(me.photos || {}).map((k) => photoPath(me, k));
+          await store.clearPhotos(); store.deletePhotos(paths).catch(() => {});
+          me.photos = {}; if (profilesById[me.id]) profilesById[me.id].photos = {};
+          FACES.forEach((f) => paintSlot(f.kind)); msg.textContent = "All photos removed."; renderSidebar();
+        } catch (ex) { msg.textContent = "Couldn't remove them. " + cleanErr(ex); }
+      } }))));
+  }
+
   // ----- a member's profile -----
   function renderProfile(username) {
     const m = main(); m.textContent = "";
@@ -1278,14 +1479,32 @@
     const joined = new Date(prof.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
     const info = el("p", { class: "hint" }, "@" + prof.username + " · joined " + joined);
     if (inviter) info.append(" · invited by ", el("a", { href: "#u=" + inviter.username, text: inviter.display_name }));
-    const body = [el("p", { class: "sentence big", text: prof.display_name }), info];
+    const body = [el("div", { class: "profhead" }, avatar(prof, 84),
+      el("div", {}, el("p", { class: "sentence big", text: prof.display_name }), info))];
+    const exprs = ["surprised", "happy", "angry"].filter((k) => prof.photos && prof.photos[k] && photoSrc(prof, k));
+    if (exprs.length) {
+      body.push(el("div", { class: "profaces" }, ...exprs.map((k) => {
+        const f = el("span", { class: "face" }, avatar(prof, 52, k)); f.style.borderColor = FACE_RING[k];
+        return el("span", { class: "profface" }, f, el("small", { text: k }));
+      })));
+    }
     const askedDays = Object.values(promptsByDay).filter((r) => r.question_id && qAuthor[r.question_id] === prof.id).map((r) => r.day).sort().reverse();
     if (askedDays.length) {
       const ln = el("p", { class: "hint" }, "Questions asked: " + askedDays.length + " · ");
       askedDays.forEach((d, i) => { if (i) ln.append(", "); ln.append(el("a", { href: "#day=" + d, text: fmtDay(d, { month: "short", day: "numeric" }) })); });
       body.push(ln);
     }
-    if (me && prof.id === me.id) body.push(el("p", {}, el("a", { href: "#invites", text: "Invite a friend" })));
+    if (me && prof.id === me.id) body.push(el("p", {}, el("a", { href: "#photos", text: "Change my photos" }), " · ", el("a", { href: "#invites", text: "Invite a friend" })));
+    if (isAdmin() && prof.id !== me.id && prof.photos && Object.keys(prof.photos).length) {
+      body.push(el("div", { class: "row" }, el("button", { class: "btn small", type: "button", text: "Remove their photos (admin)", onclick: async () => {
+        try {
+          const paths = Object.keys(prof.photos).map((k) => photoPath(prof, k));
+          await store.adminClearPhotos(prof.id);
+          store.deletePhotos(paths).catch(() => {});
+          prof.photos = {}; renderProfile(username);
+        } catch { /* leave it as it is */ }
+      } })));
+    }
     if (isAdmin() && prof.id !== me.id) {
       const msg = el("span", { class: "hint" });
       body.push(el("div", { class: "row" },
@@ -1410,6 +1629,7 @@
     if (h === "invites") return { view: "invites" };
     if (h === "comments") return { view: "comments" };
     if (h === "questions") return { view: "questions" };
+    if (h === "photos") return { view: "photos" };
     if (h === "design") return { view: "design" };
     if (h.startsWith("u=")) return { view: "profile", username: decodeURIComponent(h.slice(2)).toLowerCase() };
     return { view: "day", day: todayKey() };
@@ -1443,6 +1663,7 @@
         item("comments", "Comments", { active: route.view === "comments", unread: unseenCount() > 0, badge: unseenCount() || 0 }),
         item("questions", "Questions", { active: route.view === "questions", unread: questionsBadge() > 0, badge: questionsBadge() || 0 }),
         item("design", "Design my card", { active: route.view === "design" }),
+        item("photos", "My photos", { active: route.view === "photos", unread: !!(me.photos && !me.photos.main) }),
         item("u=" + me.username, "My profile", { active: route.view === "profile" && route.username === me.username }),
         item("invites", "Invite a friend", { active: route.view === "invites" }));
     }
@@ -1528,6 +1749,7 @@
     else if (route.view === "invites" && me) renderInvites();
     else if (route.view === "comments" && me) renderComments();
     else if (route.view === "questions" && me) { renderQuestions(); refreshQuestions(); }
+    else if (route.view === "photos" && me) renderPhotos();
     else if (route.view === "design" && me) renderDesigner();
     else renderDay(route.view === "day" ? route.day : todayKey());
     window.scrollTo({ top: 0 });
