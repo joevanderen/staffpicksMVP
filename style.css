@@ -124,13 +124,17 @@ label.field em { font-weight: normal; color: #555; font-style: normal; margin-le
 .portal-logo { font-family: var(--marker); font-size: 30px; color: var(--red); }
 .portal-date { font-family: var(--type); }
 .ask-row { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+/* The question is a card, not a box you could type into (a couple of people tried). */
 .ask-box {
   flex: 1; min-width: 220px; min-height: 84px; display: flex; align-items: center;
-  background: #fff; border: 2px solid; border-color: #404040 #fff #fff #404040;
-  padding: 8px 12px; font-family: var(--type); font-size: 20px; line-height: 1.35; overflow: hidden;
+  background: #fffbe0; border: 2px solid #b9a24a; box-shadow: 3px 3px 0 rgba(0,0,0,.22);
+  padding: 10px 14px; font-family: var(--type); font-size: 20px; line-height: 1.35; overflow: hidden; cursor: default;
 }
-.ask-box.idle { color: #777; }
 .ask-box .ask-text { display: block; transition: filter .12s linear; }
+.ask-box .ask-text.pop { animation: askpop .35s ease-out; }
+@keyframes askpop { 0% { transform: scale(.96); } 60% { transform: scale(1.02); } 100% { transform: scale(1); } }
+.step { font-family: var(--type); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; margin: 12px 2px 4px; color: #444; }
+.card.editing { transform: none; }
 .recent { font-size: 12px; margin: 10px 2px 0; line-height: 1.5; display: flex; flex-wrap: wrap; gap: 2px 12px; }
 .recent b { font-family: var(--type); flex-basis: 100%; }
 .recent span.ln { color: #333; min-width: 0; overflow-wrap: anywhere; }
@@ -212,6 +216,7 @@ label.field em { font-weight: normal; color: #555; font-style: normal; margin-le
 
 @media (prefers-reduced-motion: reduce) {
   .ask-box .ask-text { transition: none; }
+  .ask-box .ask-text.pop { animation: none; }
 }
 
 /* who reacted / saved, and the confidence stamp */

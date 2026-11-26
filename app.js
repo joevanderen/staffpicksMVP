@@ -93,12 +93,27 @@
     // Legacy anon keys are JWTs (start with "eyJ") and go in Authorization too.
     // Newer publishable keys (sb_publishable_...) are not JWTs, so they go in apikey only.
     if (cfg.SUPABASE_ANON_KEY.startsWith("eyJ")) headers.Authorization = "Bearer " + cfg.SUPABASE_ANON_KEY;
-    async function req(path, opts = {}) {
-      const h = { ...headers };
+    // One place that talks to Supabase as the logged-in person. If the login ran out, it quietly gets a fresh one
+    // and retries once; if that fails, the login screen is shown (see sessionEnded).
+    async function authed(root, path, opts, retried) {
       const tok = await Auth.token();           // logged in: act as that person
+      if (me && !tok) { sessionEnded(); throw sessionErr(); }
+      const h = { ...headers };
       if (tok) h.Authorization = "Bearer " + tok;
-      const r = await fetch(base + path, { ...opts, headers: { ...h, ...(opts.headers || {}) } });
-      if (!r.ok) throw new Error((await r.text()) || r.statusText);
+      const r = await fetch(root + path, { ...opts, headers: { ...h, ...(opts.headers || {}) } });
+      if (r.ok) return r;
+      const text = await r.text();
+      if (tok && (r.status === 401 || /JWT expired|PGRST30[123]/i.test(text))) {
+        if (!retried) {
+          await Auth.forceRefresh();
+          if (Auth.session()) return authed(root, path, opts, true);
+        }
+        sessionEnded(); throw sessionErr();
+      }
+      throw new Error(text || r.statusText);
+    }
+    async function req(path, opts = {}) {
+      const r = await authed(base, path, opts);
       if (r.status === 204) return null;
       try { return await r.json(); } catch { return null; }
     }
@@ -106,11 +121,7 @@
     // Storage (profile photos live in a private bucket and are shown through short-lived signed links)
     const sbase = cfg.SUPABASE_URL.replace(/\/$/, "") + "/storage/v1";
     async function sreq(path, opts = {}) {
-      const h = { ...headers };
-      const tok = await Auth.token();
-      if (tok) h.Authorization = "Bearer " + tok;
-      const r = await fetch(sbase + path, { ...opts, headers: { ...h, ...(opts.headers || {}) } });
-      if (!r.ok) throw new Error((await r.text()) || r.statusText);
+      const r = await authed(sbase, path, opts);
       try { return await r.json(); } catch { return null; }
     }
     const PROFILE_COLS = "id,username,display_name,role,blocked,invited_by,invite_code,created_at";
@@ -159,6 +170,7 @@
         return rows && rows[0];
       },
       listPosts: () => req("/posts?select=*&order=created_at.desc&limit=2000"),
+      editPost: (id, f) => rpc_("edit_my_post", { p_id: id, p_title: f.title, p_caption: f.caption, p_link: f.link, p_confidence: f.confidence }),
       async addPost(p) {
         const rows = await req("/posts", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify(p) });
         return rows && rows[0];
@@ -258,6 +270,14 @@
         if (all.some((x) => x.day === p.day && x.device_id === p.device_id)) throw new Error("duplicate key");
         const row = { ...p, id: uuid(), created_at: new Date(nowMs()).toISOString() };
         all.unshift(row); wr(OK, all);
+        return row;
+      },
+      async editPost(id, f) {
+        const all = rd(OK, []);
+        const row = all.find((x) => x.id === id && x.device_id === actorId());
+        if (!row) throw new Error("not_editable");
+        Object.assign(row, f, { edited_at: new Date(nowMs()).toISOString() });
+        wr(OK, all);
         return row;
       },
       async listReactions() { return rd(RK, []); },
@@ -466,7 +486,10 @@
       if (host === "youtu.be") id = u.pathname.slice(1, 12);
       else if (u.pathname === "/watch") id = u.searchParams.get("v") || "";
       else { const m = u.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/); if (m) id = m[1]; }
-      if (/^[\w-]{11}$/.test(id)) info.embed = { src: `https://www.youtube-nocookie.com/embed/${id}`, ratio: "16 / 9" };
+      const ytq = "playsinline=1&rel=0&enablejsapi=1&origin=" + encodeURIComponent(location.origin);
+      const list = u.searchParams.get("list") || "";
+      if (/^[\w-]{11}$/.test(id)) info.embed = { src: `https://www.youtube-nocookie.com/embed/${id}?${ytq}`, ratio: "16 / 9", yt: true };
+      else if (u.pathname === "/playlist" && /^[\w-]{10,60}$/.test(list)) info.embed = { src: `https://www.youtube-nocookie.com/embed/videoseries?list=${list}&${ytq}`, ratio: "16 / 9", yt: true };
     } else if (host === "music.apple.com") info.label = "Listen on Apple Music";
     else if (host === "maps.app.goo.gl" || (/(^|\.)google\.[a-z.]+$/.test(host) && u.pathname.startsWith("/maps"))) info.label = "Open in Google Maps";
     else if (host.endsWith("imdb.com")) info.label = "Open on IMDb";
@@ -487,16 +510,41 @@
     playerSlot.hidden = true;
     if (info.embed) {
       const playBtn = el("button", { class: "btn small", type: "button", text: "▶ Play here" });
+      let stopListening = null;
+      const closePlayer = () => {
+        if (stopListening) { stopListening(); stopListening = null; }
+        playerSlot.hidden = true; playerSlot.textContent = ""; playBtn.textContent = "▶ Play here";
+      };
       playBtn.addEventListener("click", () => {
-        if (!playerSlot.hidden) { playerSlot.hidden = true; playerSlot.textContent = ""; playBtn.textContent = "▶ Play here"; return; }
+        if (!playerSlot.hidden) { closePlayer(); return; }
         const f = el("iframe", {
-          src: info.embed.src, title: "Player", loading: "lazy",
-          allow: "encrypted-media; fullscreen; picture-in-picture", referrerpolicy: "strict-origin-when-cross-origin",
-          sandbox: "allow-scripts allow-same-origin allow-popups allow-presentation"
+          src: info.embed.src, title: "Player",
+          allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen",
+          allowfullscreen: "allowfullscreen", referrerpolicy: "strict-origin-when-cross-origin",
+          sandbox: "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-presentation"
         });
         if (info.embed.height) f.style.height = info.embed.height + "px";
         if (info.embed.ratio) f.style.aspectRatio = info.embed.ratio;
         playerSlot.textContent = ""; playerSlot.append(f); playerSlot.hidden = false; playBtn.textContent = "✕ Close player";
+        if (info.embed.yt) {
+          // Some YouTube owners switch embedding off. YouTube then reports an error from inside the player; say so
+          // and point at the real thing instead of leaving a dead grey box.
+          const onMsg = (ev) => {
+            if (ev.source !== f.contentWindow) return;
+            let d = ev.data;
+            if (typeof d === "string") { try { d = JSON.parse(d); } catch { return; } }
+            if (d && d.event === "onError") {
+              playerSlot.textContent = "";
+              playerSlot.append(el("p", { class: "hint" }, "YouTube won't play this video here (the owner turned that off). ",
+                el("a", { href: info.href, target: "_blank", rel: "noopener noreferrer nofollow", text: "Watch it on YouTube ↗" })));
+            }
+          };
+          window.addEventListener("message", onMsg);
+          stopListening = () => window.removeEventListener("message", onMsg);
+          f.addEventListener("load", () => {
+            try { f.contentWindow.postMessage(JSON.stringify({ event: "listening", id: 1, channel: "widget" }), "https://www.youtube-nocookie.com"); } catch { /* ignore */ }
+          });
+        }
       });
       row.append(playBtn);
     }
@@ -607,9 +655,24 @@
     const meta = el("p", { class: "meta" });
     if (prof) meta.append(avatar(prof, 22), " ");
     meta.append("— ");
-    meta.append(prof ? el("a", { href: "#u=" + prof.username, text: post.author_name }) : post.author_name, ", " + when);
+    meta.append(prof ? el("a", { href: "#u=" + prof.username, text: post.author_name }) : post.author_name, ", " + when + (post.edited_at ? " · edited" : ""));
     c.append(meta);
     if (opts.preview) return c;
+    // Your own answer can be changed on the day you posted it.
+    if (post.device_id === actorId() && post.day === todayKey()) {
+      meta.append(" · ", el("button", { class: "linklike", type: "button", text: "Edit my answer", onclick: () => {
+        const box = el("article", { class: "card editing" });
+        box.style.setProperty("--tilt", "0deg");
+        const f = buildAnswerForm(post.day, {
+          existing: post,
+          onCancel: () => box.replaceWith(c),
+          onSaved: (row) => { Object.assign(post, row); reindex(); box.replaceWith(makeCard(post, opts)); }
+        });
+        box.append(el("h3", { class: "title", text: "Edit your answer" }), f);
+        c.replaceWith(box);
+        f._focus();
+      } }));
+    }
 
     const bar = el("div", { class: "reactions" });
     const faces = el("div", { class: "faces" });
@@ -674,7 +737,23 @@
   // ============================================================
   // the answer form
   // ============================================================
-  function buildAnswerForm(day) {
+  // What someone has typed but not posted is kept on this device, so a timed-out login or a reload doesn't lose it.
+  const DRAFT = "staffpicks.draft.";
+  const draftKey = (day) => DRAFT + (me ? me.id : "x") + "." + day;
+  function readDraft(day) { try { return JSON.parse(localStorage.getItem(draftKey(day)) || "null"); } catch { return null; } }
+  function saveDraft(day, d) {
+    try {
+      if (d.t || d.c || d.l) localStorage.setItem(draftKey(day), JSON.stringify(d));
+      else localStorage.removeItem(draftKey(day));
+    } catch { /* private mode */ }
+  }
+  function clearDrafts() {
+    try { Object.keys(localStorage).filter((k) => k.startsWith(DRAFT)).forEach((k) => localStorage.removeItem(k)); } catch { /* ignore */ }
+  }
+
+  // The same form posts a new answer, or (with opts.existing) edits one made earlier today.
+  function buildAnswerForm(day, opts = {}) {
+    const ex = opts.existing || null;
     const title = el("input", { maxlength: "120", required: "required", placeholder: "A name, a place, a song... whatever fits" });
     const caption = el("textarea", { rows: "3", maxlength: String(cfg.CAPTION_MAX), placeholder: "A line or two. Be honest." });
     const link = el("input", { type: "text", inputmode: "url", autocapitalize: "off", maxlength: "500", placeholder: "Spotify, YouTube, Maps, anything..." });
@@ -683,10 +762,11 @@
     const confBtns = [["sure", "Strong opinion"], ["vibes", "Just vibes"]].map(([val, label]) =>
       el("button", { class: "rbtn", type: "button", "aria-pressed": "false", text: label, onclick: () => {
         confidence = confidence === val ? null : val;
-        confBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(confidence === ["sure", "vibes"][i])));
+        syncConf(); persist();
       } }));
+    const syncConf = () => confBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(confidence === ["sure", "vibes"][i])));
     const err = el("p", { class: "err", role: "alert" });
-    const btn = el("button", { class: "btn big", type: "submit", text: "Post it" });
+    const btn = el("button", { class: "btn big", type: "submit", text: ex ? "Save changes" : "Post it" });
     const form = el("form", { class: "answer-form" },
       el("label", { class: "field" }, el("span", { text: "Your answer" }), title),
       el("label", { class: "field" }, el("span", {}, "Why? ", counter), caption),
@@ -695,8 +775,20 @@
       el("div", { class: "field" }, el("span", { text: "How sure are you? (optional)" }),
         el("div", { class: "reactions" }, ...confBtns),
         el("p", { class: "hint", text: "Tap again to clear. Skip it if you'd rather not say." })),
-      el("div", { class: "row" }, btn), err);
+      el("div", { class: "row" }, btn,
+        ex ? el("button", { class: "btn", type: "button", text: "Cancel", onclick: () => opts.onCancel && opts.onCancel() }) : null),
+      ex ? el("p", { class: "hint", text: "You can edit your answer until the next question arrives (6 AM Buenos Aires)." }) : null,
+      err);
     const updateCounter = () => { counter.textContent = (cfg.CAPTION_MAX - caption.value.length) + " characters left"; };
+    const persist = () => { if (!ex) saveDraft(day, { t: title.value, c: caption.value, l: link.value, k: confidence }); };
+
+    if (ex) { title.value = ex.title || ""; caption.value = ex.caption || ""; link.value = ex.link || ""; confidence = ex.confidence || null; }
+    else {
+      const d = readDraft(day);
+      if (d) { title.value = d.t || ""; caption.value = d.c || ""; link.value = d.l || ""; confidence = d.k === "sure" || d.k === "vibes" ? d.k : null; }
+    }
+    syncConf();
+    for (const x of [title, caption, link]) x.addEventListener("input", persist);
     caption.addEventListener("input", updateCounter);
     updateCounter();
 
@@ -713,20 +805,28 @@
       }
       btn.disabled = true;
       try {
+        if (ex) {
+          const row = await store.editPost(ex.id, { title: t, caption: cap, link: lk || null, confidence });
+          if (opts.onSaved) opts.onSaved(row);
+          return;
+        }
         const row = await store.addPost({
           day, author_name: myName(), device_id: actorId(), user_id: me ? me.id : undefined,
           card_style: me && CardStyle.valid(me.card_style) ? me.card_style : undefined,
           title: t, caption: cap, link: lk || null, scope: "global", confidence
         });
+        try { localStorage.removeItem(draftKey(day)); } catch { /* ignore */ }
         if (row) posts = [row, ...posts];
         reindex();
         delete state.dismissed[day];
         saveState();
         go("day=" + day);
-      } catch (ex) {
-        const msg = String(ex && ex.message || "");
-        if (/duplicate|23505/i.test(msg)) { err.textContent = "You've already answered this day. Reloading..."; await refresh(); }
-        else err.textContent = "Couldn't post. " + msg.slice(0, 160);
+      } catch (ex2) {
+        const msg = String(ex2 && ex2.message || "");
+        if (ex2 && ex2.sessionEnded) return;   // the login screen is already showing
+        if (/not_editable/i.test(msg)) err.textContent = "Editing for that day has closed.";
+        else if (/duplicate|23505/i.test(msg)) { err.textContent = "You've already answered this day. Reloading..."; await refresh(); }
+        else err.textContent = (ex ? "Couldn't save. " : "Couldn't post. ") + msg.slice(0, 160);
         btn.disabled = false;
       }
     });
@@ -844,9 +944,7 @@
 
     const token = ++animToken;
     const text = el("span", { class: "ask-text" });
-    const box = el("div", { class: "ask-box" }, text);
-    const reveal = el("button", { class: "btn big", type: "button", text: "Reveal" });
-    const skipLine = el("p", { class: "skipline" });
+    const box = el("div", { class: "ask-box", title: "Today's question" }, text);
     const formWrap = el("div");
 
     function showForm() {
@@ -855,30 +953,26 @@
       const credit = creditLine(row);
       if (credit) formWrap.append(credit);
       formWrap.append(
-        el("p", { class: "note", text: "Everyone answers the same question. Answer today's to unlock the feed, the archive and your inbox." }), f);
+        el("p", { class: "step", text: "Your answer" }),
+        el("p", { class: "note", text: "Type your answer in the boxes below. Everyone answers the same question, and answering unlocks the feed, the archive and your inbox." }), f);
       return f;
     }
 
-    if (state.revealed[today]) {
+    // The question simply shows up: a quick shuffle (about a second, tap it to skip) on the first visit of the day,
+    // nothing at all if REVEAL is "instant" or the person prefers less motion.
+    const quick = cfg.REVEAL !== "instant" && !reduceMotion && !state.revealed[today];
+    state.revealed[today] = true; saveState();
+    if (!quick) {
       text.textContent = row.prompt;
-      reveal.hidden = true;
       showForm();
     } else {
-      text.textContent = "What will today's question be?";
-      box.classList.add("idle");
-      reveal.addEventListener("click", async () => {
-        reveal.disabled = true;
-        state.revealed[today] = true; saveState();
-        box.classList.remove("idle");
-        const ctl = { skip: false };
-        const skip = el("button", { class: "linklike", type: "button", text: "skip animation", onclick: () => { ctl.skip = true; } });
-        skipLine.append(skip);
-        await runReveal(text, row, token, ctl);
+      const ctl = { skip: false };
+      box.addEventListener("click", () => { ctl.skip = true; });
+      runReveal(text, row, token, ctl).then(() => {
         if (token !== animToken) return;
-        skipLine.textContent = "";
-        reveal.hidden = true;
+        text.classList.add("pop");
         const f = showForm();
-        f._focus();
+        if (window.matchMedia && matchMedia("(pointer: fine)").matches) f._focus();
       });
     }
 
@@ -891,8 +985,8 @@
         el("div", { class: "portal-head" },
           el("span", { class: "portal-logo", text: cfg.SITE_NAME }),
           el("span", { class: "portal-date", text: fmtDay(today, { weekday: "long", month: "long", day: "numeric" }) })),
-        el("div", { class: "ask-row" }, box, reveal),
-        skipLine,
+        el("p", { class: "step", text: "Today's question" }),
+        el("div", { class: "ask-row" }, box),
         recent.length ? el("p", { class: "recent" }, el("b", { text: "Recent questions: " }),
           ...recent.map((r) => el("span", { class: "ln", text: r.short_title }))) : null,
         formWrap)));
@@ -905,23 +999,15 @@
       const reals = DATA.real.filter((p) => p.id !== row.prompt_key).map((p) => p.prompt);
       const fakes = DATA.fake.slice();
       const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-      const N = 34;
-      const seq = [];
-      for (let i = 0; i < N; i++) seq.push(Math.random() < 0.4 && fakes.length ? pick(fakes) : pick(reals));
-      const tail = [];
-      for (let i = 0; i < 6; i++) tail.push(i % 2 === 0 ? pick(reals) : (fakes.length ? pick(fakes) : pick(reals)));
-      const total = N + tail.length;
+      const N = 9;   // nine blurred flashes, slowing down, then the real one: roughly a second
       let i = 0;
       (function step() {
-        if (token !== animToken || ctl.skip) { finish(); return; }
-        if (i >= total) { finish(); return; }
-        const legible = i >= N;
-        textEl.textContent = legible ? tail[i - N] : seq[i];
-        textEl.style.filter = legible ? "none" : "blur(5px)";
+        if (token !== animToken || ctl.skip || i >= N) { finish(); return; }
+        textEl.textContent = Math.random() < 0.4 && fakes.length ? pick(fakes) : pick(reals);
+        textEl.style.filter = "blur(4px)";
         const t = i / N;
-        const delay = legible ? 420 + (i - N) * 140 : 40 + 150 * t * t * t + 20 * t;
         i++;
-        setTimeout(step, delay);
+        setTimeout(step, 55 + 110 * t * t);
       })();
     });
   }
@@ -1815,8 +1901,26 @@
   // ============================================================
   // accounts: login, joining with an invite, who am I
   // ============================================================
-  const login = { step: "email", email: "", inviteOk: false, inviter: "", checked: false, linkError: false };
+  const login = { step: "email", email: "", inviteOk: false, inviter: "", checked: false, linkError: false, notice: "" };
   const byCode = () => cfg.LOGIN_METHOD === "code";
+
+  // The login ran out (an old tab, a sleeping laptop, logging out somewhere else): say so right away and go to the
+  // login screen instead of letting the next click fail with a database error. What someone was typing is kept (see drafts).
+  let sessionOver = false;
+  function sessionErr() { const e = new Error("Your login timed out. Please log in again."); e.sessionEnded = true; return e; }
+  function sessionEnded() {
+    if (sessionOver) return;
+    sessionOver = true;
+    login.step = "email";
+    login.notice = "Your login timed out, so you've been signed out. Log in again and you'll pick up where you left off. Anything you were typing is saved.";
+    if (location.hash !== "#login") location.hash = "login";
+    render();
+  }
+  async function checkSession() {
+    if (!(REMOTE && me) || sessionOver) return;
+    try { await Auth.token(); } catch { /* offline: try again later */ }
+    if (!Auth.session()) sessionEnded();
+  }
 
   async function loadMe() {
     me = null; profileChecked = false;
@@ -1868,7 +1972,10 @@
 
   function showLogin() {
     const banner = $("#login-invite");
-    if (state.pendingInvite && login.inviteOk) {
+    if (login.notice) {
+      banner.hidden = false;
+      banner.textContent = login.notice;
+    } else if (state.pendingInvite && login.inviteOk) {
       banner.hidden = false;
       banner.textContent = (login.inviter ? login.inviter + " invited you." : "You've been invited.") + " Enter your email to join.";
     } else if (state.pendingInvite) {
@@ -1997,7 +2104,7 @@
       if (me || Auth.session()) {
         Auth.signOut();
         state.name = ""; state.saved = {}; state.dismissed = {}; state.joinedDay = ""; state.savesSynced = false; state.accountId = ""; state.commentsSeen = 0;
-        saveState();
+        saveState(); clearDrafts();
         location.hash = ""; location.reload();
         return;
       }
@@ -2006,6 +2113,10 @@
       render();
     });
     wireAuthForms();
+    Auth.onEnd = () => { if (me) sessionEnded(); };
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) checkSession(); });
+    window.addEventListener("focus", checkSession);
+    setInterval(checkSession, 60000);
     $("#menu-btn").addEventListener("click", () => $("#side").classList.toggle("open"));
     window.addEventListener("hashchange", async () => {
       if (REMOTE && /access_token=|error=/.test(location.hash)) { await takeAuthFromHash(); location.reload(); return; }

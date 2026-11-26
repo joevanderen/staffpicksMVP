@@ -11,6 +11,15 @@
   try { session = JSON.parse(localStorage.getItem(KEY) || "null"); } catch { session = null; }
   if (session && !(session.access_token && session.refresh_token)) session = null;
 
+  function readStored() {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY) || "null");
+      return s && s.access_token && s.refresh_token ? s : null;
+    } catch { return null; }
+  }
+  // Tell the page the login is over (it shows the login screen with a note).
+  function ended() { try { if (window.Auth && typeof window.Auth.onEnd === "function") window.Auth.onEnd(); } catch { /* ignore */ } }
+
   function persist() {
     try {
       if (session) localStorage.setItem(KEY, JSON.stringify(session));
@@ -49,16 +58,28 @@
   function refresh() {
     if (!session) return Promise.resolve(null);
     if (refreshing) return refreshing;
-    refreshing = call("/token?grant_type=refresh_token", { refresh_token: session.refresh_token })
+    const used = session.refresh_token;
+    refreshing = call("/token?grant_type=refresh_token", { refresh_token: used })
       .then((s) => { store(s); return session; })
       .catch((e) => {
+        // Refresh tokens are single-use. If another tab of this site already refreshed, use its login instead of ending ours.
+        const other = readStored();
+        if (other && other.refresh_token !== used) { session = other; return session; }
         // A bad refresh token means the login is over. A network hiccup should not log anyone out.
-        if (e.status && e.status >= 400 && e.status < 500) { session = null; persist(); }
+        if (e.status && e.status >= 400 && e.status < 500) { session = null; persist(); ended(); }
         throw e;
       })
       .finally(() => { refreshing = null; });
     return refreshing;
   }
+
+  // Another tab logged in, refreshed or logged out: follow it.
+  window.addEventListener("storage", (e) => {
+    if (e.key !== KEY) return;
+    const had = !!session;
+    session = readStored();
+    if (had && !session) ended();
+  });
 
   window.Auth = {
     enabled: ENABLED,
@@ -71,6 +92,12 @@
         try { await refresh(); } catch { /* fall through with what we have, or null if the login ended */ }
       }
       return session ? session.access_token : null;
+    },
+    // Try to get a fresh login right now (used when the server says ours expired). Returns the session, or null if the login is over.
+    async forceRefresh() {
+      if (!session) return null;
+      try { await refresh(); } catch { /* network trouble keeps the session; a rejected login clears it */ }
+      return session;
     },
     // Sends a code. allowNew=false means "only for people who already have an account".
     // The email holds a link (and, once you've set up your own email sender, a code too).

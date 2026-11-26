@@ -90,3 +90,14 @@ How it works:
 3. Members get **My photos** in the sidebar: a main photo, plus three optional faces (surprised, happy, angry). Photos are squared and shrunk to 256 pixels in the browser before upload, which also removes any hidden location data. On a phone, "Take a photo" opens the front camera.
 4. The main photo shows next to names on cards and comments and on profiles. When someone reacts to a post, their matching face appears on the card: surprised for "Woah, I've never heard of that!", happy for "Preach", angry for "No! God! No! God! Please! NO!". If they skipped a face, their main photo appears with a colored ring. If they have no photo, a colored circle with their initial.
 5. Members can remove any or all of their photos. As admin you can remove someone's photos from their profile page. A blocked member's photos stop showing.
+
+## Update 7: editing your answer, and sessions that time out gracefully
+
+1. Run `supabase-update-7.sql` in the Supabase SQL Editor (safe to run twice). It adds `edited_at` to posts and an `edit_my_post` function that only lets you change your own answer while its day is still today (days turn over at 6 AM Buenos Aires).
+2. Upload the site files over the old ones.
+
+What changed:
+- **Edit my answer**: a small link on your own card, today only. Edited answers show "· edited".
+- **Timed-out logins**: the site now refreshes an expired login quietly and retries. If the login is really over (or you logged out in another tab), it shows the login screen with a note instead of failing with a database error. Whatever you were typing in the answer box is saved on the device and comes back after you log in.
+- **First screen**: today's question appears on its own after a ~1 second shuffle (tap it to skip). Set `REVEAL: "instant"` in `config.js` to skip the shuffle entirely.
+- **YouTube "Play here"**: the player now tells YouTube which site it is on, and if the video's owner has turned embedding off it says so and links to YouTube instead of showing a dead box.
